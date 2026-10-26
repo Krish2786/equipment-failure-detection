@@ -1,4 +1,4 @@
-# Equipment Failure Detection System (MachineGuard)
+# Equipment Failure Detection System 
 > Machine Learning System for Infosys Springboard Internship 7.0 / College Engineering Capstone Project: **"Machine Learning System for Early Detection of Equipment Failure"**
 
 The complete React + Vite application is located in [`equipment-failure-frontend/`](./equipment-failure-frontend/).
