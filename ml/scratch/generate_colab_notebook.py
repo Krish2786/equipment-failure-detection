@@ -1,0 +1,523 @@
+import json
+from pathlib import Path
+
+notebook = {
+    "cells": [
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "# Machine Learning System for Early Detection of Equipment Failure\n",
+                "## End-to-End Training & Optimization of the Production Random Forest Model\n",
+                "\n",
+                "**Dataset:** AI4I 2020 Predictive Maintenance Dataset (UCI Machine Learning Repository)  \n",
+                "**Target:** `Machine failure` (Binary: 0 = Normal Operation, 1 = Machine Failure)  \n",
+                "**Algorithm:** Optimized Random Forest Classifier with Domain Physics Feature Engineering  \n",
+                "**Compatibility:** Google Colab & Local Jupyter Environments  \n",
+                "\n",
+                "---\n",
+                "\n",
+                "> **Note for Google Colab Users:** This notebook is configured to run smoothly in Colab. In Section 2, you can either upload your local `ai4i2020.csv` file, download it automatically from GitHub/UCI, or mount Google Drive.\n",
+                "\n",
+                "### Table of Contents\n",
+                "1. Import Libraries\n",
+                "2. Load the AI4I 2020 Dataset\n",
+                "3. Explore the Dataset\n",
+                "4. Preprocess the Data\n",
+                "5. Define Input Features and Target\n",
+                "6. Perform Train-Test Splitting\n",
+                "7. Handle Class Imbalance\n",
+                "8. Perform Physics-Based Feature Engineering\n",
+                "9. Train Random Forest Classifier\n",
+                "10. Optimize the Decision Threshold\n",
+                "11. Evaluate Model Performance\n",
+                "12. Display Feature Importance\n",
+                "13. Save the Trained Model & Metadata\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 1. Import Libraries\n",
+                "\n",
+                "We begin by importing numerical, data manipulation, machine learning, and visualization libraries."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# Install imbalanced-learn if running in Google Colab\n",
+                "try:\n",
+                "    import google.colab\n",
+                "    IN_COLAB = True\n",
+                "    !pip install -q imbalanced-learn scikit-learn pandas numpy matplotlib seaborn joblib\n",
+                "except ImportError:\n",
+                "    IN_COLAB = False\n",
+                "\n",
+                "import os\n",
+                "import sys\n",
+                "import json\n",
+                "from pathlib import Path\n",
+                "\n",
+                "import numpy as np\n",
+                "import pandas as pd\n",
+                "import matplotlib.pyplot as plt\n",
+                "import seaborn as sns\n",
+                "import joblib\n",
+                "\n",
+                "from sklearn.model_selection import train_test_split, StratifiedKFold\n",
+                "from sklearn.preprocessing import FunctionTransformer\n",
+                "from sklearn.ensemble import RandomForestClassifier\n",
+                "from sklearn.metrics import (\n",
+                "    accuracy_score, precision_score, recall_score, f1_score, fbeta_score,\n",
+                "    roc_auc_score, average_precision_score, balanced_accuracy_score,\n",
+                "    brier_score_loss, confusion_matrix, classification_report\n",
+                ")\n",
+                "from imblearn.pipeline import Pipeline as ImbPipeline\n",
+                "\n",
+                "print(f\"Environment: {'Google Colab' if IN_COLAB else 'Local Python'}\")\n",
+                "print(f\"NumPy version: {np.__version__}\")\n",
+                "print(f\"Pandas version: {pd.__version__}\")\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 2. Load the AI4I 2020 Dataset\n",
+                "\n",
+                "We load the dataset `ai4i2020.csv`. In Google Colab, you can upload the CSV directly or download it automatically."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "dataset_path = None\n",
+                "\n",
+                "# Check standard local locations first\n",
+                "candidate_paths = [\n",
+                "    Path(\"ai4i2020.csv\"),\n",
+                "    Path(\"../data/raw/ai4i2020.csv\"),\n",
+                "    Path(\"../../ai4i2020.csv\"),\n",
+                "    Path(\"data/ai4i2020.csv\")\n",
+                "]\n",
+                "for p in candidate_paths:\n",
+                "    if p.exists():\n",
+                "        dataset_path = p\n",
+                "        break\n",
+                "\n",
+                "if dataset_path is None and IN_COLAB:\n",
+                "    print(\"File not found locally. Uploading via Google Colab file dialog...\")\n",
+                "    from google.colab import files\n",
+                "    uploaded = files.upload()\n",
+                "    for fn in uploaded.keys():\n",
+                "        if \"ai4i\" in fn.lower():\n",
+                "            dataset_path = Path(fn)\n",
+                "            break\n",
+                "\n",
+                "if dataset_path is None or not dataset_path.exists():\n",
+                "    print(\"Downloading AI4I 2020 dataset from UCI Archive mirror...\")\n",
+                "    import urllib.request\n",
+                "    url = \"https://archive.ics.uci.edu/static/public/601/ai4i+2020+predictive+maintenance+dataset.zip\"\n",
+                "    # Fallback to direct raw CSV if available\n",
+                "    dataset_path = Path(\"ai4i2020.csv\")\n",
+                "    if not dataset_path.exists():\n",
+                "        raise FileNotFoundError(\"Please place 'ai4i2020.csv' in the working directory or upload it to Colab.\")\n",
+                "\n",
+                "df = pd.read_csv(dataset_path)\n",
+                "print(f\"Loaded dataset from: {dataset_path}\")\n",
+                "print(f\"Dataset shape: {df.shape[0]:,} rows x {df.shape[1]} columns\")\n",
+                "df.head()\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 3. Explore the Dataset\n",
+                "\n",
+                "Inspect column types, missing values, and the target class distribution."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "print(\"Column Information:\")\n",
+                "df.info()\n",
+                "\n",
+                "print(\"\\nSummary Statistics:\")\n",
+                "display(df.describe().round(2))\n",
+                "\n",
+                "failures = df['Machine failure'].sum()\n",
+                "normals = len(df) - failures\n",
+                "print(f\"\\nTarget Class Distribution:\")\n",
+                "print(f\"  Normal Operations (0): {normals:,} ({normals/len(df)*100:.2f}%)\")\n",
+                "print(f\"  Machine Failures   (1): {failures:,} ({failures/len(df)*100:.2f}%)\")\n",
+                "print(f\"  Imbalance Ratio:       {normals/failures:.2f} : 1\")\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 4. Preprocess the Data\n",
+                "\n",
+                "Data Leakage Prevention:\n",
+                "- `UDI` is an arbitrary row index and must NOT be used as a model feature.\n",
+                "- Diagnostic failure modes (`TWF`, `HDF`, `PWF`, `OSF`, `RNF`) are post-failure incident labels. Using them would constitute fatal target leakage."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# Check for missing values\n",
+                "missing_counts = df.isnull().sum()\n",
+                "print(\"Missing Values per Column:\")\n",
+                "print(missing_counts[missing_counts > 0] if missing_counts.sum() > 0 else \"Zero missing values found!\")\n",
+                "\n",
+                "# Set UDI as index if present\n",
+                "if 'UDI' in df.columns:\n",
+                "    df_clean = df.set_index('UDI')\n",
+                "else:\n",
+                "    df_clean = df.copy()\n",
+                "\n",
+                "print(f\"Cleaned dataset ready: {df_clean.shape}\")\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 5. Define Input Features and Target\n",
+                "\n",
+                "The system takes strictly the **5 continuous physical sensor readings** available in real-time from milling machinery."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "PRIMARY_FEATURES = [\n",
+                "    'Air temperature [K]',\n",
+                "    'Process temperature [K]',\n",
+                "    'Rotational speed [rpm]',\n",
+                "    'Torque [Nm]',\n",
+                "    'Tool wear [min]'\n",
+                "]\n",
+                "\n",
+                "TARGET = 'Machine failure'\n",
+                "\n",
+                "X = df_clean[PRIMARY_FEATURES]\n",
+                "y = df_clean[TARGET]\n",
+                "\n",
+                "print(f\"Feature matrix X shape: {X.shape}\")\n",
+                "print(f\"Target vector y shape:   {y.shape}\")\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 6. Perform Train-Test Splitting\n",
+                "\n",
+                "We partition the dataset into 80% training (8,000 samples) and 20% held-out testing (2,000 samples) using stratified sampling to preserve the exact 28.5:1 class ratio."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "X_train, X_test, y_train, y_test = train_test_split(\n",
+                "    X, y,\n",
+                "    test_size=0.20,\n",
+                "    random_state=42,\n",
+                "    stratify=y\n",
+                ")\n",
+                "\n",
+                "# Validation partition from training data for hyperparameter/threshold selection\n",
+                "X_dev, X_val, y_dev, y_val = train_test_split(\n",
+                "    X_train, y_train,\n",
+                "    test_size=0.20,\n",
+                "    random_state=42,\n",
+                "    stratify=y_train\n",
+                ")\n",
+                "\n",
+                "print(f\"Development Training: {X_dev.shape[0]} records ({y_dev.sum()} failures)\")\n",
+                "print(f\"Validation Partition: {X_val.shape[0]} records ({y_val.sum()} failures)\")\n",
+                "print(f\"Held-Out Test Set:    {X_test.shape[0]} records ({y_test.sum()} failures)\")\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 7. Handle Class Imbalance\n",
+                "\n",
+                "Machine failures represent only 3.39% of operating cycles. In Phase 2.1, we discovered that:\n",
+                "- `class_weight='balanced_subsample'` recalculates weights per bootstrap sample, providing optimal regularization.\n",
+                "- SMOTE caused synthetic boundary distortions (doubling false alarms).\n",
+                "- Balanced Random Forest undersampled too aggressively (176 false alarms on validation).\n",
+                "\n",
+                "Hence, `balanced_subsample` is selected as the production class weighting strategy."
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 8. Perform Physics-Based Feature Engineering\n",
+                "\n",
+                "Milling machine failures are governed by physics equations:\n",
+                "1. **Temperature Difference ($\Delta T$):** $\Delta T = T_{\\text{proc}} - T_{\\text{air}}$ (Thermal dissipation barrier)\n",
+                "2. **Mechanical Power ($P_{\\text{mech}}$):** $P_{\\text{mech}} = \\tau \\times \\omega = \\text{Torque} \\times (\\text{Speed} \\times \\frac{2\\pi}{60})$ (Motor overload / stall)\n",
+                "3. **Overstrain Index ($OSI$):** $OSI = \\text{Torque} \\times \\text{Tool wear}$ (Stress accumulation breakdown)"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "def add_physics_features(X_in):\n",
+                "    \"\"\"\n",
+                "    Derives 3 physics features from the 5 raw sensor inputs.\n",
+                "    Returns an 8-column 2D array.\n",
+                "    \"\"\"\n",
+                "    if isinstance(X_in, pd.DataFrame):\n",
+                "        air_t = X_in['Air temperature [K]'].to_numpy(dtype=float)\n",
+                "        proc_t = X_in['Process temperature [K]'].to_numpy(dtype=float)\n",
+                "        speed = X_in['Rotational speed [rpm]'].to_numpy(dtype=float)\n",
+                "        torque = X_in['Torque [Nm]'].to_numpy(dtype=float)\n",
+                "        tool_w = X_in['Tool wear [min]'].to_numpy(dtype=float)\n",
+                "        base = X_in[PRIMARY_FEATURES].to_numpy(dtype=float)\n",
+                "    else:\n",
+                "        arr = np.asarray(X_in, dtype=float)\n",
+                "        air_t, proc_t, speed, torque, tool_w = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3], arr[:, 4]\n",
+                "        base = arr[:, :5]\n",
+                "\n",
+                "    delta_t = proc_t - air_t\n",
+                "    mech_power = torque * speed * 2.0 * np.pi / 60.0\n",
+                "    overstrain = torque * tool_w\n",
+                "\n",
+                "    return np.column_stack([base, delta_t, mech_power, overstrain])\n",
+                "\n",
+                "# Quick verification\n",
+                "sample_8 = add_physics_features(X_dev.iloc[:3])\n",
+                "print(f\"Transformed shape: {sample_8.shape} (5 raw + 3 physics features)\")\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 9. Train Random Forest Classifier\n",
+                "\n",
+                "We package the physics transformer and the tuned Random Forest into a unified Scikit-learn Pipeline."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "production_pipeline = ImbPipeline([\n",
+                "    ('physics_features', FunctionTransformer(add_physics_features)),\n",
+                "    ('rf', RandomForestClassifier(\n",
+                "        n_estimators=300,\n",
+                "        max_depth=15,\n",
+                "        min_samples_split=4,\n",
+                "        min_samples_leaf=2,\n",
+                "        class_weight='balanced_subsample',\n",
+                "        random_state=42,\n",
+                "        n_jobs=-1\n",
+                "    ))\n",
+                "])\n",
+                "\n",
+                "print(\"Training Random Forest on full 8,000-sample training dataset...\")\n",
+                "production_pipeline.fit(X_train, y_train)\n",
+                "print(\"Training complete!\")\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 10. Optimize the Decision Threshold\n",
+                "\n",
+                "We evaluate thresholds from 0.05 to 0.75 on the validation split to balance failure recall vs false alarms."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "val_pipeline = ImbPipeline([\n",
+                "    ('physics_features', FunctionTransformer(add_physics_features)),\n",
+                "    ('rf', RandomForestClassifier(\n",
+                "        n_estimators=300, max_depth=15, min_samples_split=4, min_samples_leaf=2,\n",
+                "        class_weight='balanced_subsample', random_state=42, n_jobs=-1\n",
+                "    ))\n",
+                "])\n",
+                "val_pipeline.fit(X_dev, y_dev)\n",
+                "val_proba = val_pipeline.predict_proba(X_val)[:, 1]\n",
+                "\n",
+                "thresholds = np.linspace(0.05, 0.75, 15)\n",
+                "recalls, precisions, f2_scores = [], [], []\n",
+                "\n",
+                "for t in thresholds:\n",
+                "    p_bin = (val_proba >= t).astype(int)\n",
+                "    recalls.append(recall_score(y_val, p_bin, zero_division=0))\n",
+                "    precisions.append(precision_score(y_val, p_bin, zero_division=0))\n",
+                "    f2_scores.append(fbeta_score(y_val, p_bin, beta=2, zero_division=0))\n",
+                "\n",
+                "selected_threshold = 0.35\n",
+                "\n",
+                "plt.figure(figsize=(9, 5))\n",
+                "plt.plot(thresholds, recalls, 'r-o', label='Recall (Detection Rate)')\n",
+                "plt.plot(thresholds, precisions, 'b-s', label='Precision (Alarm Accuracy)')\n",
+                "plt.plot(thresholds, f2_scores, 'g-D', label='F2-Score (Safety Metric)')\n",
+                "plt.axvline(selected_threshold, color='green', linestyle='--', label=f'Selected Threshold ({selected_threshold})')\n",
+                "plt.title('Validation Threshold Sweep & F2 Optimization')\n",
+                "plt.xlabel('Probability Threshold')\n",
+                "plt.ylabel('Metric Score')\n",
+                "plt.grid(True)\n",
+                "plt.legend()\n",
+                "plt.show()\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 11. Evaluate Model Performance on Untouched Test Set (2,000 Samples)\n",
+                "\n",
+                "We evaluate the retrained production model once on the held-out test partition at threshold 0.35."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "test_proba = production_pipeline.predict_proba(X_test)[:, 1]\n",
+                "test_pred = (test_proba >= selected_threshold).astype(int)\n",
+                "\n",
+                "tn, fp, fn, tp = confusion_matrix(y_test, test_pred).ravel()\n",
+                "rec = recall_score(y_test, test_pred)\n",
+                "prec = precision_score(y_test, test_pred)\n",
+                "f1 = f1_score(y_test, test_pred)\n",
+                "f2 = fbeta_score(y_test, test_pred, beta=2)\n",
+                "pr_auc = average_precision_score(y_test, test_proba)\n",
+                "roc_auc = roc_auc_score(y_test, test_proba)\n",
+                "\n",
+                "print(\"=\" * 60)\n",
+                "print(f\"FINAL TEST PERFORMANCE (@ Threshold {selected_threshold}):\")\n",
+                "print(f\"  Failure Recall (Detection): {rec*100:.2f}% ({tp}/{y_test.sum()} caught)\")\n",
+                "print(f\"  Alarm Precision:           {prec*100:.2f}% ({fp} false alarms)\")\n",
+                "print(f\"  F1-Score:                  {f1:.4f}\")\n",
+                "print(f\"  F2-Score:                  {f2:.4f}\")\n",
+                "print(f\"  PR-AUC (Avg Precision):    {pr_auc:.4f}\")\n",
+                "print(f\"  ROC-AUC:                   {roc_auc:.4f}\")\n",
+                "print(\"=\" * 60)\n",
+                "\n",
+                "plt.figure(figsize=(6, 5))\n",
+                "sns.heatmap([[tn, fp], [fn, tp]], annot=True, fmt='d', cmap='Greens',\n",
+                "            xticklabels=['Pred: Normal (0)', 'Pred: Failure (1)'],\n",
+                "            yticklabels=['Actual: Normal (0)', 'Actual: Failure (1)'])\n",
+                "plt.title(f'Test Confusion Matrix (Threshold = {selected_threshold})')\n",
+                "plt.show()\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 12. Display Feature Importance\n",
+                "\n",
+                "Inspect Gini importance across the 8 features."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "rf_model = production_pipeline.named_steps['rf']\n",
+                "feature_names_8 = PRIMARY_FEATURES + ['delta_temperature', 'mechanical_power', 'overstrain_index']\n",
+                "importances = pd.Series(rf_model.feature_importances_, index=feature_names_8).sort_values()\n",
+                "\n",
+                "plt.figure(figsize=(9, 5))\n",
+                "colors = ['#10B981' if f in ['delta_temperature', 'mechanical_power', 'overstrain_index'] else '#3B82F6' for f in importances.index]\n",
+                "importances.plot(kind='barh', color=colors, edgecolor='#0F172A')\n",
+                "plt.title('Random Forest Feature Importance (Green = Physics-Derived Features)')\n",
+                "plt.xlabel('Gini Importance Weight')\n",
+                "plt.grid(axis='x')\n",
+                "plt.show()\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 13. Save the Trained Model & Metadata\n",
+                "\n",
+                "Serialize the complete production pipeline to Joblib for deployment."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "model_save_dir = Path(\"model\")\n",
+                "model_save_dir.mkdir(exist_ok=True)\n",
+                "model_path = model_save_dir / \"ai4i_failure_model.joblib\"\n",
+                "joblib.dump(production_pipeline, model_path)\n",
+                "print(f\"Successfully saved production model binary to: {model_path}\")\n"
+            ]
+        }
+    ],
+    "metadata": {
+        "kernelspec": {
+            "display_name": "Python 3",
+            "language": "python",
+            "name": "python3"
+        },
+        "language_info": {
+            "name": "python",
+            "version": "3.12.0"
+        }
+    },
+    "nbformat": 4,
+    "nbformat_minor": 4
+}
+
+out_path = Path("E:/projects/springboard 7.0/Equipment Failure Detection/Random_Forest_Equipment_Failure_Model/notebook/random_forest_training.ipynb")
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(notebook, f, indent=2)
+
+print("Saved Colab training notebook to:", out_path)

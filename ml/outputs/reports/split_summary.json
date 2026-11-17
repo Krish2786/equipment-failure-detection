@@ -1,0 +1,39 @@
+{
+    "random_state": 42,
+    "split_ratio": {
+        "train": 0.8,
+        "test": 0.2
+    },
+    "stratified": true,
+    "total_records": 10000,
+    "primary_features": [
+        "Air temperature [K]",
+        "Process temperature [K]",
+        "Rotational speed [rpm]",
+        "Torque [Nm]",
+        "Tool wear [min]"
+    ],
+    "target": "Machine failure",
+    "train_set": {
+        "total": 8000,
+        "normal_0": 7729,
+        "failure_1": 271,
+        "failure_pct": 3.3875
+    },
+    "test_set": {
+        "total": 2000,
+        "normal_0": 1932,
+        "failure_1": 68,
+        "failure_pct": 3.4000000000000004
+    },
+    "data_provenance": {
+        "raw_file": "E:\\projects\\springboard 7.0\\Equipment Failure Detection\\ml\\data\\raw\\ai4i2020.csv",
+        "cleaned_file": "E:\\projects\\springboard 7.0\\Equipment Failure Detection\\ml\\data\\processed\\ai4i_cleaned.csv",
+        "splits": {
+            "X_train": "E:\\projects\\springboard 7.0\\Equipment Failure Detection\\ml\\data\\splits\\X_train.csv",
+            "X_test": "E:\\projects\\springboard 7.0\\Equipment Failure Detection\\ml\\data\\splits\\X_test.csv",
+            "y_train": "E:\\projects\\springboard 7.0\\Equipment Failure Detection\\ml\\data\\splits\\y_train.csv",
+            "y_test": "E:\\projects\\springboard 7.0\\Equipment Failure Detection\\ml\\data\\splits\\y_test.csv"
+        }
+    }
+}

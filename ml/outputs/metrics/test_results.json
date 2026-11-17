@@ -1,0 +1,67 @@
+{
+    "model_name": "Optimized Random Forest with Physics Feature Engineering",
+    "model_family": "Random Forest",
+    "selected_threshold": 0.35,
+    "test_dataset_size": 2000,
+    "test_failure_count": 68,
+    "test_normal_count": 1932,
+    "metrics_at_selected_threshold": {
+        "Accuracy": 0.9895,
+        "Precision": 0.8507462686567164,
+        "Recall": 0.8382352941176471,
+        "F1-Score": 0.8444444444444444,
+        "F2-Score": 0.8407079646017699,
+        "Balanced Accuracy": 0.916529655340397,
+        "ROC-AUC": 0.9790791316526611,
+        "PR-AUC": 0.8576340335801877,
+        "Brier Score": 0.009844652638084827
+    },
+    "metrics_at_default_0_5": {
+        "Accuracy": 0.99,
+        "Precision": 0.9,
+        "Recall": 0.7941176470588235,
+        "F1-Score": 0.84375,
+        "F2-Score": 0.8132530120481928
+    },
+    "confusion_matrix": {
+        "True Positives (Detected Failures)": 57,
+        "False Positives (False Alarms)": 10,
+        "False Negatives (Missed Failures)": 11,
+        "True Negatives (Correct Normal)": 1922
+    },
+    "classification_report": {
+        "0": {
+            "precision": 0.9943093636833937,
+            "recall": 0.994824016563147,
+            "f1-score": 0.9945666235446313,
+            "support": 1932.0
+        },
+        "1": {
+            "precision": 0.8507462686567164,
+            "recall": 0.8382352941176471,
+            "f1-score": 0.8444444444444444,
+            "support": 68.0
+        },
+        "accuracy": 0.9895,
+        "macro avg": {
+            "precision": 0.9225278161700551,
+            "recall": 0.916529655340397,
+            "f1-score": 0.9195055339945379,
+            "support": 2000.0
+        },
+        "weighted avg": {
+            "precision": 0.9894282184524867,
+            "recall": 0.9895,
+            "f1-score": 0.989462469455225,
+            "support": 2000.0
+        }
+    },
+    "secondary_comparison": {
+        "xgboost_phase2_test_recall": 0.8235,
+        "xgboost_phase2_test_precision": 0.5545,
+        "xgboost_phase2_false_positives": 45,
+        "rf_phase2_1_test_recall": 0.8382,
+        "rf_phase2_1_test_precision": 0.8507,
+        "rf_phase2_1_false_positives": 10
+    }
+}

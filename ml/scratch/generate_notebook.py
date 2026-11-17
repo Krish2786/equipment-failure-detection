@@ -1,0 +1,227 @@
+import json
+from pathlib import Path
+
+notebook = {
+    "cells": [
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "# Phase 2.1: Random Forest Optimization for Improved Failure Detection Recall\n",
+                "\n",
+                "**Project:** Machine Learning System for Early Detection of Equipment Failure  \n",
+                "**Dataset:** AI4I 2020 Predictive Maintenance  \n",
+                "**Primary Production Algorithm:** Optimized Random Forest with Domain Physics Telemetry  \n",
+                "**Target:** `Machine failure` (0 = Normal, 1 = Failure)  \n",
+                "\n",
+                "---\n",
+                "\n",
+                "### Key Objectives\n",
+                "1. **Preserve Random Forest as Primary Algorithm:** Maintain Random Forest as the final production model.\n",
+                "2. **Address Baseline Recall Limitation:** Overcome the baseline 59.3% recall while avoiding excessive false alarms.\n",
+                "3. **Evaluate 6 Optimization Strategies:**\n",
+                "   - Baseline class-weighted Random Forest\n",
+                "   - Exp A: Hyperparameter tuning (tree depth, min leaf/split, estimators)\n",
+                "   - Exp B: Operational decision threshold calibration\n",
+                "   - Exp C: SMOTE within ImbPipeline cross-validation folds\n",
+                "   - Exp D: Balanced Random Forest (bootstrap downsampling per tree)\n",
+                "   - Exp E: Physics-based domain telemetry derivations (Delta-T, Mechanical Power, Overstrain Index)\n",
+                "   - Exp F: Combined Physics Pipeline + Calibrated Threshold\n",
+                "4. **Held-Out Test Validation:** Evaluate once on 2,000 untouched test samples.\n",
+                "5. **Interpretability & Deployment Interface:** Verify feature importance and 5-sensor frontend compatibility.\n"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "import os\n",
+                "import sys\n",
+                "import json\n",
+                "from pathlib import Path\n",
+                "\n",
+                "sys.path.insert(0, str(Path(\"../src\").resolve()))\n",
+                "from utils import PRIMARY_FEATURES, TARGET, ENGINEERED_FEATURE_NAMES, ALL_8_FEATURES, add_physics_features\n",
+                "\n",
+                "import numpy as np\n",
+                "import pandas as pd\n",
+                "import matplotlib.pyplot as plt\n",
+                "import seaborn as sns\n",
+                "import joblib\n",
+                "\n",
+                "from sklearn.ensemble import RandomForestClassifier\n",
+                "from sklearn.preprocessing import FunctionTransformer\n",
+                "from sklearn.metrics import (\n",
+                "    accuracy_score, precision_score, recall_score, f1_score, fbeta_score,\n",
+                "    roc_auc_score, average_precision_score, confusion_matrix, classification_report\n",
+                ")\n",
+                "from imblearn.pipeline import Pipeline as ImbPipeline\n",
+                "from imblearn.ensemble import BalancedRandomForestClassifier\n",
+                "from imblearn.over_sampling import SMOTE\n",
+                "\n",
+                "print('Environment and packages initialized successfully!')\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 1. Load Preprocessed Partitions & Existing Metrics\n",
+                "\n",
+                "We load the exact splits prepared in Phase 1 without altering any data."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "splits_dir = Path(\"../data/splits\")\n",
+                "X_train = pd.read_csv(splits_dir / \"X_train.csv\", index_col=0)\n",
+                "X_test = pd.read_csv(splits_dir / \"X_test.csv\", index_col=0)\n",
+                "y_train = pd.read_csv(splits_dir / \"y_train.csv\", index_col=0).squeeze()\n",
+                "y_test = pd.read_csv(splits_dir / \"y_test.csv\", index_col=0).squeeze()\n",
+                "\n",
+                "print(f\"X_train shape: {X_train.shape} | Failures: {y_train.sum()} ({y_train.mean()*100:.2f}%)\")\n",
+                "print(f\"X_test shape:  {X_test.shape}  | Failures: {y_test.sum()}  ({y_test.mean()*100:.2f}%)\")\n",
+                "print(f\"Features: {list(X_train.columns)}\")\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 2. Experimental Optimization Results Comparison\n",
+                "\n",
+                "We load the measured validation results across all 6 experimental configurations."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "metrics_dir = Path(\"../outputs/metrics\")\n",
+                "exp_df = pd.read_csv(metrics_dir / \"rf_experiments_comparison.csv\")\n",
+                "display_cols = [\"Config_Name\", \"CV_PR-AUC_Mean\", \"Val_Recall\", \"Val_Precision\", \"Val_F1-Score\", \"Val_F2-Score\", \"Val_PR-AUC\", \"Val_FP\", \"Val_FN\"]\n",
+                "exp_df[display_cols]\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 3. Threshold Optimization Curves\n",
+                "\n",
+                "Let's examine how the decision threshold influences Failure Detection Recall and Alarm Precision."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "thresh_df = pd.read_csv(metrics_dir / \"rf_threshold_analysis.csv\")\n",
+                "eng_thresh = thresh_df[thresh_df[\"Config\"].str.contains(\"Engineered\", case=False)]\n",
+                "\n",
+                "plt.figure(figsize=(9, 5))\n",
+                "plt.plot(eng_thresh[\"Threshold\"], eng_thresh[\"Recall\"], 'r-o', label=\"Recall (Failure Catch Rate)\")\n",
+                "plt.plot(eng_thresh[\"Threshold\"], eng_thresh[\"Precision\"], 'b-s', label=\"Precision (Alarm Accuracy)\")\n",
+                "plt.plot(eng_thresh[\"Threshold\"], eng_thresh[\"F2-Score\"], 'g-D', label=\"F2-Score (Cost Metric)\")\n",
+                "plt.axvline(0.35, color=\"green\", linestyle=\"--\", label=\"Selected Threshold (0.35)\")\n",
+                "plt.title(\"Decision Threshold Sweep for Physics-Engineered Random Forest\")\n",
+                "plt.xlabel(\"Probability Threshold\")\n",
+                "plt.ylabel(\"Score\")\n",
+                "plt.grid(True)\n",
+                "plt.legend()\n",
+                "plt.show()\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 4. Final Held-Out Test Evaluation (2,000 Records)\n",
+                "\n",
+                "We evaluate the serialized winning production pipeline on the untouched test partition."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "best_model_path = Path(\"../models/best_model/ai4i_failure_model.joblib\")\n",
+                "production_model = joblib.load(best_model_path)\n",
+                "\n",
+                "test_proba = production_model.predict_proba(X_test)[:, 1]\n",
+                "test_pred = (test_proba >= 0.35).astype(int)\n",
+                "\n",
+                "tn, fp, fn, tp = confusion_matrix(y_test, test_pred).ravel()\n",
+                "print(f\"Test Recall:    {tp / (tp + fn) * 100:.2f}% ({tp}/{tp + fn} caught)\")\n",
+                "print(f\"Test Precision: {tp / (tp + fp) * 100:.2f}% (Only {fp} false alarms)\")\n",
+                "print(f\"Test F1-Score:  {f1_score(y_test, test_pred):.4f}\")\n",
+                "print(f\"Test F2-Score:  {fbeta_score(y_test, test_pred, beta=2):.4f}\")\n",
+                "print(f\"Test PR-AUC:    {average_precision_score(y_test, test_proba):.4f}\")\n",
+                "print(f\"Test ROC-AUC:   {roc_auc_score(y_test, test_proba):.4f}\")\n",
+                "\n",
+                "plt.figure(figsize=(6, 5))\n",
+                "sns.heatmap([[tn, fp], [fn, tp]], annot=True, fmt=\"d\", cmap=\"Greens\",\n",
+                "            xticklabels=[\"Pred Normal\", \"Pred Failure\"], yticklabels=[\"Actual Normal\", \"Actual Failure\"])\n",
+                "plt.title(\"Held-Out Test Confusion Matrix (Threshold = 0.35)\")\n",
+                "plt.show()\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 5. Inference Interface Test\n",
+                "\n",
+                "Verify that the high-level inference interface seamlessly receives the 5 frontend sensor values and outputs correct risk classifications."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "from model_prediction import predict_failure_risk\n",
+                "\n",
+                "# Nominal machine test\n",
+                "res_nominal = predict_failure_risk(air_temp=298.2, process_temp=308.7, rotational_speed=1500, torque=40.0, tool_wear=35)\n",
+                "print(\"Nominal Operation:\", res_nominal[\"risk_level\"], \"| Prob:\", res_nominal[\"failure_probability\"])\n",
+                "\n",
+                "# Overstrain machine test\n",
+                "res_overstrain = predict_failure_risk(air_temp=301.5, process_temp=310.8, rotational_speed=1300, torque=65.5, tool_wear=215)\n",
+                "print(\"Overstrain Condition:\", res_overstrain[\"risk_level\"], \"| Prob:\", res_overstrain[\"failure_probability\"])\n"
+            ]
+        }
+    ],
+    "metadata": {
+        "kernelspec": {
+            "display_name": "Python 3",
+            "language": "python",
+            "name": "python3"
+        },
+        "language_info": {
+            "name": "python",
+            "version": "3.12.0"
+        }
+    },
+    "nbformat": 4,
+    "nbformat_minor": 4
+}
+
+out_path = Path("E:/projects/springboard 7.0/Equipment Failure Detection/ml/notebooks/03_ai4i_random_forest_optimization.ipynb")
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(notebook, f, indent=2)
+
+print("Saved notebook to:", out_path)
