@@ -1,0 +1,12 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+
+# Model runtime (must match the training environment as closely as possible).
+# The shipped .joblib was pickled with scikit-learn 1.9.1; newer/older versions
+# still unpickle but emit an InconsistentVersionWarning.
+scikit-learn>=1.2.0
+imbalanced-learn>=0.12.0
+pandas>=2.0.0
+numpy>=1.24.0
+joblib>=1.3.0
