@@ -1,0 +1,40 @@
+{
+  "test_scenarios": [
+    {
+      "scenario_id": "SCENARIO_01",
+      "description": "Nominal Machine Telemetry (Healthy Milling Operation)",
+      "telemetry": {
+        "air_temp": 298.2,
+        "process_temp": 308.7,
+        "rotational_speed": 1500.0,
+        "torque": 40.0,
+        "tool_wear": 35.0
+      },
+      "expected_outcome": "Normal Operation (LOW risk, probability near 0.0)"
+    },
+    {
+      "scenario_id": "SCENARIO_02",
+      "description": "Overstrain Failure Profile (Extreme Torque with Worn Cutting Tool)",
+      "telemetry": {
+        "air_temp": 301.5,
+        "process_temp": 310.8,
+        "rotational_speed": 1300.0,
+        "torque": 65.5,
+        "tool_wear": 215.0
+      },
+      "expected_outcome": "Failure Predicted (CRITICAL risk, probability > 0.90)"
+    },
+    {
+      "scenario_id": "SCENARIO_03",
+      "description": "Heat Dissipation Anomaly Profile (Thermal Gradient Collapse)",
+      "telemetry": {
+        "air_temp": 303.8,
+        "process_temp": 311.2,
+        "rotational_speed": 1320.0,
+        "torque": 52.0,
+        "tool_wear": 140.0
+      },
+      "expected_outcome": "Failure Predicted (CRITICAL risk, probability > 0.75)"
+    }
+  ]
+}

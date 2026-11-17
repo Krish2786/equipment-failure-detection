@@ -1,0 +1,13 @@
+# Equipment Failure Detection - Optimized Random Forest Dependencies
+# Python >= 3.10 required
+
+# Core Numerical & Machine Learning
+scikit-learn>=1.2.0
+imbalanced-learn>=0.12.0
+joblib>=1.3.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Visualization & Reporting
+matplotlib>=3.7.0
+seaborn>=0.12.0

@@ -1,0 +1,65 @@
+{
+    "project_title": "Machine Learning System for Early Detection of Equipment Failure",
+    "model_family": "Random Forest",
+    "model_name": "Optimized Random Forest with Physics Feature Engineering",
+    "optimization_phase": "Phase 2.1",
+    "selected_probability_threshold": 0.35,
+    "feature_architecture": {
+        "raw_sensor_inputs_count": 5,
+        "raw_sensor_inputs": [
+            "Air temperature [K]",
+            "Process temperature [K]",
+            "Rotational speed [rpm]",
+            "Torque [Nm]",
+            "Tool wear [min]"
+        ],
+        "internally_derived_features_count": 3,
+        "internally_derived_features": [
+            "delta_temperature",
+            "mechanical_power",
+            "overstrain_index"
+        ],
+        "total_model_features": 8
+    },
+    "test_dataset_profile": {
+        "total_test_records": 2000,
+        "actual_failure_records": 68,
+        "actual_normal_records": 1932,
+        "failure_prevalence_percentage": 3.4
+    },
+    "verified_test_metrics_at_selected_threshold_0_35": {
+        "Accuracy": 0.9895,
+        "Accuracy_Percentage": "98.95%",
+        "Recall": 0.8382,
+        "Recall_Percentage": "83.82%",
+        "Precision": 0.8507,
+        "Precision_Percentage": "85.07%",
+        "F1_Score": 0.8444,
+        "F2_Score": 0.8407,
+        "PR_AUC": 0.8576,
+        "ROC_AUC": 0.9791,
+        "Balanced_Accuracy": 0.9165,
+        "Brier_Score": 0.0098
+    },
+    "metrics_at_default_threshold_0_50": {
+        "Accuracy": 0.99,
+        "Recall": 0.7941,
+        "Precision": 0.90,
+        "F1_Score": 0.8438,
+        "F2_Score": 0.8133
+    },
+    "test_confusion_matrix": {
+        "True_Positives_Caught_Failures": 57,
+        "False_Positives_False_Alarms": 10,
+        "False_Negatives_Missed_Breakdowns": 11,
+        "True_Negatives_Correct_Normal": 1922
+    },
+    "comparison_with_baseline_and_secondary_models": {
+        "baseline_random_forest_test_recall": "58.82% (40/68)",
+        "baseline_random_forest_test_precision": "76.92%",
+        "secondary_xgboost_test_recall": "82.35% (56/68)",
+        "secondary_xgboost_test_precision": "55.45% (45 false alarms)",
+        "optimized_random_forest_test_recall": "83.82% (57/68)",
+        "optimized_random_forest_test_precision": "85.07% (10 false alarms)"
+    }
+}

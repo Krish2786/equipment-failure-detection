@@ -1,0 +1,111 @@
+{
+    "model_family": "Random Forest",
+    "model_name": "Optimized Random Forest with Physics Feature Engineering",
+    "algorithm_class": "Pipeline(FunctionTransformer + RandomForestClassifier)",
+    "model_binary_file": "ai4i_failure_model.joblib",
+    "primary_features": [
+        "Air temperature [K]",
+        "Process temperature [K]",
+        "Rotational speed [rpm]",
+        "Torque [Nm]",
+        "Tool wear [min]"
+    ],
+    "feature_order": [
+        "Air temperature [K]",
+        "Process temperature [K]",
+        "Rotational speed [rpm]",
+        "Torque [Nm]",
+        "Tool wear [min]"
+    ],
+    "internal_derived_features": [
+        "delta_temperature",
+        "mechanical_power",
+        "overstrain_index"
+    ],
+    "total_internal_features": [
+        "Air temperature [K]",
+        "Process temperature [K]",
+        "Rotational speed [rpm]",
+        "Torque [Nm]",
+        "Tool wear [min]",
+        "delta_temperature",
+        "mechanical_power",
+        "overstrain_index"
+    ],
+    "selected_probability_threshold": 0.35,
+    "target_variable": "Machine failure",
+    "target_mapping": {
+        "0": "Normal Operation",
+        "1": "Machine Failure"
+    },
+    "random_seed": 42,
+    "training_data_info": {
+        "total_training_records": 8000,
+        "training_normal_count": 7729,
+        "training_failure_count": 271,
+        "class_imbalance_ratio": "28.52 : 1"
+    },
+    "validation_metrics": {
+        "Config_Name": "Experiment F (Combined: Physics RF @ Threshold 0.35)",
+        "Algorithm_Variant": "Pipeline(Physics_Features + RF + Tuned Threshold)",
+        "Feature_Set": "8 Features (5 Raw + 3 Physics)",
+        "Class_Balancing": "balanced_subsample",
+        "Key_Hyperparameters": "n_est=300, depth=15, split=4, leaf=2, threshold=0.35",
+        "Selected_Threshold": 0.35,
+        "CV_PR-AUC_Mean": 0.8704846484506135,
+        "CV_Recall_Mean": 0.773784355179704,
+        "CV_Precision_Mean": 0.0,
+        "CV_F1-Score_Mean": 0.0,
+        "CV_F2-Score_Mean": 0.0,
+        "CV_ROC-AUC_Mean": 0.0,
+        "Val_Accuracy": 0.988125,
+        "Val_Precision": 0.8431372549019608,
+        "Val_Recall": 0.7962962962962963,
+        "Val_F1-Score": 0.819047619047619,
+        "Val_F2-Score": 0.8052434456928839,
+        "Val_Balanced_Accuracy": 0.895560826026544,
+        "Val_ROC-AUC": 0.9730127928704901,
+        "Val_PR-AUC": 0.8347510707039175,
+        "Val_TP": 43,
+        "Val_FP": 8,
+        "Val_FN": 11,
+        "Val_TN": 1538
+    },
+    "test_metrics": {
+        "Accuracy": 0.9895,
+        "Precision": 0.8507462686567164,
+        "Recall": 0.8382352941176471,
+        "F1-Score": 0.8444444444444444,
+        "F2-Score": 0.8407079646017699,
+        "Balanced_Accuracy": 0.916529655340397,
+        "ROC-AUC": 0.9790791316526611,
+        "PR-AUC": 0.8576340335801877,
+        "Brier_Score": 0.009844652638084827
+    },
+    "confusion_matrix": {
+        "True_Positives": 57,
+        "False_Positives": 10,
+        "False_Negatives": 11,
+        "True_Negatives": 1922
+    },
+    "hyperparameters": {
+        "bootstrap": true,
+        "class_weight": "balanced_subsample",
+        "criterion": "gini",
+        "max_depth": 15,
+        "max_features": "sqrt",
+        "min_impurity_decrease": 0.0,
+        "min_samples_leaf": 2,
+        "min_samples_split": 4,
+        "min_weight_fraction_leaf": 0.0,
+        "n_estimators": 300,
+        "n_jobs": -1,
+        "random_state": 42
+    },
+    "required_package_versions": {
+        "scikit-learn": ">=1.2.0",
+        "imbalanced-learn": ">=0.12.0",
+        "joblib": ">=1.3.0"
+    },
+    "disclaimer": "This model is an optimized Random Forest classifier trained on the AI4I 2020 synthetic predictive maintenance dataset. Probabilities reflect statistical classification under given physical sensor readings and do not guarantee physical time-to-failure on physical factory machinery."
+}
