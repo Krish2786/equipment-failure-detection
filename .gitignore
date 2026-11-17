@@ -1,15 +1,9 @@
-# Node / Frontend Dependencies & Builds
-node_modules/
-*/node_modules/
-dist/
-*/dist/
-dist-ssr/
-build/
-*.local
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
+# Local MachineGuard database (users + prediction history)
+/data/
+data/*.db
+*.db
+*.sqlite
+*.sqlite3
 
 # Environment variables
 .env
@@ -24,6 +18,16 @@ __pycache__/
 *$py.class
 *.so
 .Python
+
+# Temporary audit and presentation working files
+PROJECT_*.md
+PROJECT_*.json
+PPT_*.md
+PRESENTATION_ASSETS.md
+MACHINEGUARD_COMPLETE_*.md
+*.pptx
+
+# Python builds and distribution
 develop-eggs/
 downloads/
 eggs/
