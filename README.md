@@ -56,6 +56,17 @@ The user-facing solution is delivered as an interactive **Streamlit** applicatio
   - Automatically records all single and batch predictions into `data/machineguard.db` linked to the active user account.
   - Interactive history explorer featuring metric summary cards, search and filter controls, detailed breakdown views, side-by-side comparison of historical predictions, and CSV history exports.
 
+- **Asset ID Tracking & Degradation Trend Charts:**
+  - Track individual machinery assets over time with customizable Machine / Asset IDs (e.g., `MILL-01`, `CNC-04`, `PRESS-001`).
+  - Interactive dual-axis degradation charts (powered by Plotly) displaying chronological failure probability escalation against the 35% operational decision threshold alongside cutting tool wear progression.
+
+- **Analytical Fleet Overview Dashboard:**
+  - High-level bird's-eye view of all tracked machinery assets across the industrial facility.
+  - Real-time fleet KPI telemetry: active machine count, assets in HIGH/CRITICAL state, count above threshold, and fleet average risk.
+  - Interactive machine asset cards equipped with live risk badges (`LOW`, `MODERATE`, `HIGH`, `CRITICAL`), trend trajectory indicators (📈 worsening, 📉 improving, ➡️ stable), failure rates, and last check timestamps.
+  - Fleet-wide comparative analytics: risk comparison bar charts, tool wear distribution, fleet risk level breakdown pie charts, and tool wear vs. failure risk bubble scatter plots.
+  - Deep-dive asset inspection view and sortable fleet summary data table.
+
 ---
 
 ## 📊 Model Architecture & Performance

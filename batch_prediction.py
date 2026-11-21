@@ -222,7 +222,7 @@ def build_batch_report(
     else:
         raw_ids = df[id_column].astype("string").str.strip()
         working["machine_id"] = [
-            value
+            str(value).strip().upper()
             if value is not pd.NA and str(value).lower() not in {"", "nan", "none", "<na>"}
             else f"ROW-{index}"
             for index, value in enumerate(raw_ids, start=1)

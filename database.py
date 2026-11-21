@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS predictions (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id              INTEGER NOT NULL,
+    machine_id           TEXT    DEFAULT 'UNASSIGNED',
     created_at           TEXT    NOT NULL,
     scenario             TEXT,
     air_temperature      REAL    NOT NULL,
@@ -84,6 +85,27 @@ def init_db() -> None:
     """Create the schema if it does not exist. Safe to call on every run."""
     with _connection() as conn:
         conn.executescript(SCHEMA)
+        # Backward-compatible check for legacy databases without machine_id
+        cursor = conn.execute("PRAGMA table_info(predictions)")
+        columns = [row["name"] for row in cursor.fetchall()]
+        if "machine_id" not in columns:
+            conn.execute(
+                "ALTER TABLE predictions ADD COLUMN machine_id TEXT DEFAULT 'UNASSIGNED'"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_predictions_user_machine "
+            "ON predictions (user_id, machine_id, created_at)"
+        )
+
+
+def normalize_machine_id(machine_id: Any) -> str:
+    """Normalize asset identifiers to uppercase string, defaulting to 'UNASSIGNED'."""
+    if machine_id is None:
+        return "UNASSIGNED"
+    val = str(machine_id).strip().upper()
+    if not val or val in {"NAN", "NONE", "<NA>", "NULL"}:
+        return "UNASSIGNED"
+    return val
 
 
 # ---------------------------------------------------------------------------
@@ -200,21 +222,24 @@ def save_prediction(
     torque: float,
     tool_wear: float,
     result: dict[str, Any],
+    machine_id: str = "UNASSIGNED",
 ) -> int:
     """Persist one model prediction for a user and return the row id."""
     created_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    norm_machine_id = normalize_machine_id(machine_id)
     with _connection() as conn:
         cursor = conn.execute(
             """
             INSERT INTO predictions (
-                user_id, created_at, scenario,
+                user_id, machine_id, created_at, scenario,
                 air_temperature, process_temperature, rotational_speed, torque, tool_wear,
                 failure_probability, failure_percentage, prediction_code, risk_level,
                 decision_threshold, recommended_action, model_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
+                norm_machine_id,
                 created_at,
                 scenario,
                 float(air_temperature),
@@ -252,6 +277,7 @@ def save_predictions_bulk(
     rows = [
         (
             user_id,
+            normalize_machine_id(record.get("machine_id")),
             created_at,
             record.get("scenario") or "Batch Upload",
             float(record["air_temperature"]),
@@ -274,31 +300,42 @@ def save_predictions_bulk(
         conn.executemany(
             """
             INSERT INTO predictions (
-                user_id, created_at, scenario,
+                user_id, machine_id, created_at, scenario,
                 air_temperature, process_temperature, rotational_speed, torque, tool_wear,
                 failure_probability, failure_percentage, prediction_code, risk_level,
                 decision_threshold, recommended_action, model_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
     return len(rows)
 
 
-def get_predictions(user_id: int, limit: int | None = None) -> list[dict[str, Any]]:
+def get_predictions(
+    user_id: int,
+    limit: int | None = None,
+    machine_id: str | None = None,
+) -> list[dict[str, Any]]:
     query = """
         SELECT * FROM predictions
         WHERE user_id = ?
-        ORDER BY id DESC
     """
     params: list[Any] = [user_id]
+    if machine_id is not None and machine_id != "All":
+        query += " AND machine_id = ?"
+        params.append(normalize_machine_id(machine_id))
+
+    query += " ORDER BY id DESC"
     if limit is not None:
         query += " LIMIT ?"
         params.append(int(limit))
 
     with _connection() as conn:
         rows = conn.execute(query, params).fetchall()
-    return [dict(row) for row in rows]
+    return [
+        {**dict(row), "machine_id": row["machine_id"] or "UNASSIGNED"}
+        for row in rows
+    ]
 
 
 def get_prediction(user_id: int, prediction_id: int) -> dict[str, Any] | None:
@@ -307,7 +344,59 @@ def get_prediction(user_id: int, prediction_id: int) -> dict[str, Any] | None:
             "SELECT * FROM predictions WHERE id = ? AND user_id = ?",
             (prediction_id, user_id),
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    res = dict(row)
+    res["machine_id"] = res.get("machine_id") or "UNASSIGNED"
+    return res
+
+
+def get_machine_trend(user_id: int, machine_id: str) -> list[dict[str, Any]]:
+    """Return all predictions for a specific machine ordered chronologically (created_at ASC)."""
+    norm_id = normalize_machine_id(machine_id)
+    query = """
+        SELECT
+            id,
+            user_id,
+            machine_id,
+            created_at,
+            scenario,
+            air_temperature,
+            process_temperature,
+            rotational_speed,
+            torque,
+            tool_wear,
+            failure_probability,
+            failure_percentage,
+            prediction_code,
+            risk_level,
+            decision_threshold,
+            recommended_action,
+            model_name
+        FROM predictions
+        WHERE user_id = ? AND machine_id = ?
+        ORDER BY created_at ASC, id ASC
+    """
+    with _connection() as conn:
+        rows = conn.execute(query, (user_id, norm_id)).fetchall()
+    return [
+        {**dict(row), "machine_id": row["machine_id"] or "UNASSIGNED"}
+        for row in rows
+    ]
+
+
+def get_distinct_machines(user_id: int) -> list[str]:
+    """Return sorted list of distinct machine IDs saved for this user."""
+    query = """
+        SELECT DISTINCT machine_id
+        FROM predictions
+        WHERE user_id = ? AND machine_id IS NOT NULL AND machine_id != ''
+        ORDER BY machine_id ASC
+    """
+    with _connection() as conn:
+        rows = conn.execute(query, (user_id,)).fetchall()
+    machines = [row["machine_id"] for row in rows if row["machine_id"]]
+    return machines if machines else ["UNASSIGNED"]
 
 
 def get_prediction_stats(user_id: int) -> dict[str, Any]:
@@ -335,6 +424,76 @@ def get_prediction_stats(user_id: int) -> dict[str, Any]:
         "max_percentage": round(float(row["max_percentage"] or 0), 2),
         "last_prediction_at": row["last_prediction_at"],
     }
+
+
+def get_fleet_summary(user_id: int) -> list[dict[str, Any]]:
+    """Return one summary row per distinct machine for the fleet overview.
+
+    Each row contains:
+        machine_id, total_checks, failure_checks, last_check_at,
+        latest_risk, latest_failure_pct, avg_failure_pct, peak_failure_pct,
+        first_failure_pct, latest_tool_wear, first_tool_wear,
+        latest_rotational_speed, latest_torque
+    """
+    query = """
+        SELECT
+            machine_id,
+            COUNT(*)                              AS total_checks,
+            COALESCE(SUM(prediction_code), 0)     AS failure_checks,
+            MAX(created_at)                       AS last_check_at,
+            COALESCE(AVG(failure_percentage), 0)  AS avg_failure_pct,
+            COALESCE(MAX(failure_percentage), 0)  AS peak_failure_pct
+        FROM predictions
+        WHERE user_id = ?
+          AND machine_id IS NOT NULL
+          AND machine_id != ''
+        GROUP BY machine_id
+        ORDER BY machine_id ASC
+    """
+    with _connection() as conn:
+        rows = conn.execute(query, (user_id,)).fetchall()
+        summaries = []
+        for row in rows:
+            mid = row["machine_id"] or "UNASSIGNED"
+            # Latest record for this machine
+            latest = conn.execute(
+                """
+                SELECT failure_percentage, risk_level, tool_wear,
+                       rotational_speed, torque, created_at
+                FROM predictions
+                WHERE user_id = ? AND machine_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (user_id, mid),
+            ).fetchone()
+            # Earliest record for trend direction
+            first = conn.execute(
+                """
+                SELECT failure_percentage, tool_wear
+                FROM predictions
+                WHERE user_id = ? AND machine_id = ?
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+                """,
+                (user_id, mid),
+            ).fetchone()
+            summaries.append({
+                "machine_id": mid,
+                "total_checks": int(row["total_checks"] or 0),
+                "failure_checks": int(row["failure_checks"] or 0),
+                "last_check_at": row["last_check_at"] or "",
+                "avg_failure_pct": round(float(row["avg_failure_pct"] or 0), 2),
+                "peak_failure_pct": round(float(row["peak_failure_pct"] or 0), 2),
+                "latest_failure_pct": round(float(latest["failure_percentage"] if latest else 0), 2),
+                "latest_risk": latest["risk_level"] if latest else "UNKNOWN",
+                "latest_tool_wear": float(latest["tool_wear"] if latest else 0),
+                "latest_rotational_speed": float(latest["rotational_speed"] if latest else 0),
+                "latest_torque": float(latest["torque"] if latest else 0),
+                "first_failure_pct": round(float(first["failure_percentage"] if first else 0), 2),
+                "first_tool_wear": float(first["tool_wear"] if first else 0),
+            })
+    return summaries
 
 
 def clear_predictions(user_id: int) -> int:

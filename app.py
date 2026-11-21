@@ -27,12 +27,23 @@ from database import (
     authenticate_user,
     clear_predictions,
     create_user,
+    get_distinct_machines,
+    get_fleet_summary,
+    get_machine_trend,
     get_prediction_stats,
     get_predictions,
     init_db,
+    normalize_machine_id,
     save_prediction,
     save_predictions_bulk,
 )
+
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
 
 
 def render_table(headers, rows):
@@ -81,6 +92,127 @@ def render_risk_distribution(risk_counts):
             """
         )
     st.markdown("".join(bars), unsafe_allow_html=True)
+
+
+def render_asset_trend_chart(machine_id: str, trend_data: list[dict]):
+    """Render dual-metric degradation trend charts for an individual asset."""
+    if not trend_data:
+        return
+
+    x_labels = [
+        f"#{r['id']} ({r['created_at'].split()[1][:5] if ' ' in r['created_at'] else r['created_at']})"
+        for r in trend_data
+    ]
+    probabilities = [r["failure_percentage"] for r in trend_data]
+    tool_wears = [r["tool_wear"] for r in trend_data]
+
+    if PLOTLY_AVAILABLE:
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.15,
+            subplot_titles=(
+                f"Failure Probability (%) vs 35% Alert Threshold — Asset {machine_id}",
+                f"Cutting Tool Wear Progression (min) — Asset {machine_id}",
+            ),
+        )
+
+        # 1. Failure Probability Trace
+        fig.add_trace(
+            go.Scatter(
+                x=x_labels,
+                y=probabilities,
+                mode="lines+markers",
+                name="Failure Risk (%)",
+                line=dict(color="#ef4444", width=3),
+                marker=dict(size=8, color="#dc2626"),
+                customdata=[
+                    [
+                        r["created_at"],
+                        r["risk_level"],
+                        r["torque"],
+                        r["rotational_speed"],
+                    ]
+                    for r in trend_data
+                ],
+                hovertemplate=(
+                    "<b>Check %{x}</b><br>"
+                    "Timestamp: %{customdata[0]}<br>"
+                    "Failure Risk: <b>%{y:.2f}%</b><br>"
+                    "Risk Level: %{customdata[1]}<br>"
+                    "Torque: %{customdata[2]} Nm<br>"
+                    "Speed: %{customdata[3]} RPM<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=1,
+        )
+
+        # Horizontal 35% Decision Threshold Line
+        fig.add_hline(
+            y=35.0,
+            line_dash="dash",
+            line_color="#f59e0b",
+            line_width=2.5,
+            annotation_text="35.0% Decision Threshold (Maintenance Trigger)",
+            annotation_position="top right",
+            annotation_font=dict(size=12, color="#f59e0b"),
+            row=1,
+            col=1,
+        )
+
+        # 2. Tool Wear Trace
+        fig.add_trace(
+            go.Scatter(
+                x=x_labels,
+                y=tool_wears,
+                mode="lines+markers",
+                name="Tool Wear (min)",
+                line=dict(color="#38bdf8", width=3),
+                marker=dict(size=8, color="#0284c7"),
+                customdata=[[r["created_at"]] for r in trend_data],
+                hovertemplate=(
+                    "<b>Check %{x}</b><br>"
+                    "Timestamp: %{customdata[0]}<br>"
+                    "Tool Wear: <b>%{y:.0f} min</b><extra></extra>"
+                ),
+            ),
+            row=2,
+            col=1,
+        )
+
+        fig.update_layout(
+            height=500,
+            margin=dict(l=50, r=40, t=50, b=40),
+            template="plotly_dark",
+            paper_bgcolor="rgba(15, 23, 42, 0.4)",
+            plot_bgcolor="rgba(30, 41, 59, 0.5)",
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1),
+        )
+        fig.update_yaxes(title_text="Probability (%)", row=1, col=1)
+        fig.update_yaxes(title_text="Wear (min)", row=2, col=1)
+        fig.update_xaxes(title_text="Inspection Sequence / Check", row=2, col=1)
+        try:
+            st.plotly_chart(fig, width="stretch")
+        except TypeError:
+            st.plotly_chart(fig, use_container_width=True)
+
+    else:
+        # Fallback using built-in Streamlit charts
+        st.caption(f"Asset Degradation Trend: {machine_id}")
+        chart_df = pd.DataFrame(
+            {
+                "Failure Risk (%)": probabilities,
+                "35% Threshold": [35.0] * len(probabilities),
+            },
+            index=x_labels,
+        )
+        st.line_chart(chart_df)
+
+        wear_df = pd.DataFrame({"Tool Wear (min)": tool_wears}, index=x_labels)
+        st.line_chart(wear_df)
 
 
 # =========================================================
@@ -533,6 +665,91 @@ hr {
     border-color: #304965 !important;
 }
 
+/* FLEET OVERVIEW CARDS */
+
+.fleet-card {
+    background: linear-gradient(145deg, #1c3452, #172940);
+    border: 1px solid #355575;
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 10px;
+    transition: 0.2s ease;
+    position: relative;
+}
+
+.fleet-card:hover {
+    border-color: #38bdf8;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 18px rgba(56, 189, 248, 0.15);
+}
+
+.fleet-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.fleet-machine-id {
+    color: #67e8f9;
+    font-size: 17px;
+    font-weight: 900;
+    letter-spacing: 0.5px;
+}
+
+.fleet-risk-badge {
+    font-size: 11px;
+    font-weight: 800;
+    padding: 3px 10px;
+    border-radius: 20px;
+    letter-spacing: 1px;
+}
+
+.fleet-risk-LOW    { background: #14532d; color: #4ade80; border: 1px solid #22c55e; }
+.fleet-risk-MODERATE { background: #422006; color: #fbbf24; border: 1px solid #f59e0b; }
+.fleet-risk-HIGH   { background: #431407; color: #fb923c; border: 1px solid #ea580c; }
+.fleet-risk-CRITICAL { background: #450a0a; color: #f87171; border: 1px solid #ef4444; }
+.fleet-risk-UNKNOWN  { background: #1e293b; color: #94a3b8; border: 1px solid #475569; }
+
+.fleet-trend-arrow {
+    font-size: 20px;
+    font-weight: 900;
+}
+
+.fleet-stat-row {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+
+.fleet-stat {
+    display: flex;
+    flex-direction: column;
+    min-width: 70px;
+}
+
+.fleet-stat-label {
+    color: #7a9cb8;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}
+
+.fleet-stat-value {
+    color: #e2e8f0;
+    font-size: 15px;
+    font-weight: 800;
+    margin-top: 2px;
+}
+
+.fleet-last-check {
+    color: #64748b;
+    font-size: 11px;
+    margin-top: 8px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -695,6 +912,479 @@ def render_auth_page():
         )
 
 
+def render_fleet_page(user_id: int) -> None:
+    """Analytical Fleet Overview Dashboard — per-machine cards, charts, trend arrows."""
+
+    st.markdown(
+        '<div class="hero">'
+        '<div class="hero-tag">FLEET HEALTH INTELLIGENCE</div>'
+        '<div class="hero-title">Fleet Overview Dashboard</div>'
+        '<div class="hero-description">'
+        'A real-time analytical view of every tracked machine asset. '
+        'Each card shows the latest risk level, trend direction, failure probability, '
+        'and historical charts — so you can prioritise maintenance across the entire fleet.'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
+
+    fleet = get_fleet_summary(user_id)
+
+    if not fleet:
+        st.info(
+            "No tracked machines yet. Run a prediction on the **Prediction Dashboard** "
+            "or upload a CSV on **Batch Prediction** to start building your fleet."
+        )
+        return
+
+    # ── Fleet-level KPI bar ──────────────────────────────────────────────────
+    total_machines = len(fleet)
+    critical_count = sum(1 for m in fleet if m["latest_risk"] in ("CRITICAL", "HIGH"))
+    avg_risk = sum(m["latest_failure_pct"] for m in fleet) / total_machines
+    total_checks = sum(m["total_checks"] for m in fleet)
+    machines_above_threshold = sum(1 for m in fleet if m["latest_failure_pct"] >= 35.0)
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Machines Tracked", total_machines)
+    k2.metric("HIGH / CRITICAL Now", critical_count)
+    k3.metric("Above Threshold (≥35%)", machines_above_threshold)
+    k4.metric("Fleet Avg Risk", f"{avg_risk:.1f}%")
+    k5.metric("Total Checks Logged", f"{total_checks:,}")
+
+    st.markdown("---")
+
+    # ── Sort / filter controls ───────────────────────────────────────────────
+    st.markdown(
+        '<div class="section-heading">Fleet Sort &amp; Filter</div>',
+        unsafe_allow_html=True
+    )
+    ctrl1, ctrl2, ctrl3 = st.columns(3)
+    with ctrl1:
+        sort_by = st.selectbox(
+            "Sort by",
+            ["Latest Risk % (High→Low)", "Machine ID (A→Z)", "Total Checks (High→Low)",
+             "Peak Risk (High→Low)", "Last Check (Newest)"],
+            key="fleet_sort"
+        )
+    with ctrl2:
+        risk_filter_fleet = st.selectbox(
+            "Filter by Risk Level",
+            ["All", "CRITICAL", "HIGH", "MODERATE", "LOW"],
+            key="fleet_risk_filter"
+        )
+    with ctrl3:
+        cards_per_row = st.selectbox("Cards per row", [2, 3, 4], index=1, key="fleet_cols")
+
+    # apply filter
+    visible_fleet = (
+        fleet if risk_filter_fleet == "All"
+        else [m for m in fleet if m["latest_risk"] == risk_filter_fleet]
+    )
+
+    # apply sort
+    if sort_by == "Machine ID (A→Z)":
+        visible_fleet = sorted(visible_fleet, key=lambda m: m["machine_id"])
+    elif sort_by == "Total Checks (High→Low)":
+        visible_fleet = sorted(visible_fleet, key=lambda m: m["total_checks"], reverse=True)
+    elif sort_by == "Peak Risk (High→Low)":
+        visible_fleet = sorted(visible_fleet, key=lambda m: m["peak_failure_pct"], reverse=True)
+    elif sort_by == "Last Check (Newest)":
+        visible_fleet = sorted(visible_fleet, key=lambda m: m["last_check_at"], reverse=True)
+    else:
+        visible_fleet = sorted(visible_fleet, key=lambda m: m["latest_failure_pct"], reverse=True)
+
+    if not visible_fleet:
+        st.info("No machines match the selected risk filter.")
+        return
+
+    st.markdown("---")
+    st.markdown(
+        f'<div class="section-heading">Machine Cards ({len(visible_fleet)} shown)</div>'
+        '<div class="section-description">Each card shows live risk badge, trend arrow, '
+        'and key sensor readings. Click on a machine to see its full degradation chart below.</div>',
+        unsafe_allow_html=True
+    )
+
+    # ── Helper: trend arrow & colour ────────────────────────────────────────
+    def _trend(first_pct: float, latest_pct: float) -> tuple[str, str, str]:
+        """Returns (arrow_emoji, colour, label)."""
+        delta = latest_pct - first_pct
+        if abs(delta) < 2.0:
+            return "➡️", "#94a3b8", f"Stable ({delta:+.1f}%)"
+        if delta > 0:
+            return "📈", "#f87171", f"Worsening ({delta:+.1f}%)"
+        return "📉", "#4ade80", f"Improving ({delta:+.1f}%)"
+
+    # ── Machine cards grid ───────────────────────────────────────────────────
+    _risk_badge_class = {
+        "LOW": "fleet-risk-LOW",
+        "MODERATE": "fleet-risk-MODERATE",
+        "HIGH": "fleet-risk-HIGH",
+        "CRITICAL": "fleet-risk-CRITICAL",
+    }
+
+    for row_start in range(0, len(visible_fleet), cards_per_row):
+        cols = st.columns(cards_per_row)
+        for col_idx, machine in enumerate(visible_fleet[row_start: row_start + cards_per_row]):
+            arrow, arrow_color, arrow_label = _trend(
+                machine["first_failure_pct"], machine["latest_failure_pct"]
+            )
+            badge_class = _risk_badge_class.get(machine["latest_risk"], "fleet-risk-UNKNOWN")
+            failure_rate = (
+                machine["failure_checks"] / machine["total_checks"] * 100
+                if machine["total_checks"] > 0 else 0.0
+            )
+            last_check_short = machine["last_check_at"][:16] if machine["last_check_at"] else "—"
+
+            with cols[col_idx]:
+                st.markdown(
+                    f'<div class="fleet-card">'
+                    f'  <div class="fleet-card-header">'
+                    f'    <span class="fleet-machine-id">⚙️ {escape(machine["machine_id"])}</span>'
+                    f'    <span class="fleet-risk-badge {badge_class}">{machine["latest_risk"]}</span>'
+                    f'  </div>'
+                    f'  <div class="fleet-stat-row">'
+                    f'    <div class="fleet-stat">'
+                    f'      <span class="fleet-stat-label">Latest Risk</span>'
+                    f'      <span class="fleet-stat-value" style="color:#67e8f9">'
+                    f'        {machine["latest_failure_pct"]:.1f}%'
+                    f'      </span>'
+                    f'    </div>'
+                    f'    <div class="fleet-stat">'
+                    f'      <span class="fleet-stat-label">Peak Risk</span>'
+                    f'      <span class="fleet-stat-value" style="color:#fb923c">'
+                    f'        {machine["peak_failure_pct"]:.1f}%'
+                    f'      </span>'
+                    f'    </div>'
+                    f'    <div class="fleet-stat">'
+                    f'      <span class="fleet-stat-label">Avg Risk</span>'
+                    f'      <span class="fleet-stat-value">{machine["avg_failure_pct"]:.1f}%</span>'
+                    f'    </div>'
+                    f'    <div class="fleet-stat">'
+                    f'      <span class="fleet-stat-label">Checks</span>'
+                    f'      <span class="fleet-stat-value">{machine["total_checks"]}</span>'
+                    f'    </div>'
+                    f'    <div class="fleet-stat">'
+                    f'      <span class="fleet-stat-label">Failure Rate</span>'
+                    f'      <span class="fleet-stat-value">{failure_rate:.0f}%</span>'
+                    f'    </div>'
+                    f'    <div class="fleet-stat">'
+                    f'      <span class="fleet-stat-label">Tool Wear</span>'
+                    f'      <span class="fleet-stat-value">{machine["latest_tool_wear"]:.0f} min</span>'
+                    f'    </div>'
+                    f'  </div>'
+                    f'  <div style="margin-top:10px; font-size:14px;">'
+                    f'    <span class="fleet-trend-arrow">{arrow}</span>'
+                    f'    <span style="color:{arrow_color}; font-size:12px; margin-left:6px;">'
+                    f'      {escape(arrow_label)}'
+                    f'    </span>'
+                    f'  </div>'
+                    f'  <div class="fleet-last-check">🕐 Last check: {escape(last_check_short)}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+    # ── Fleet-wide Plotly charts ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(
+        '<div class="section-heading">📊 Fleet-Wide Risk Analytics</div>'
+        '<div class="section-description">'
+        'Comparative charts across all tracked machines — spot outliers and prioritise inspections.'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+    machine_ids = [m["machine_id"] for m in visible_fleet]
+    latest_risks = [m["latest_failure_pct"] for m in visible_fleet]
+    avg_risks = [m["avg_failure_pct"] for m in visible_fleet]
+    peak_risks = [m["peak_failure_pct"] for m in visible_fleet]
+    tool_wears = [m["latest_tool_wear"] for m in visible_fleet]
+
+    # Colour each bar by risk level
+    _risk_color = {
+        "LOW": "#4ade80",
+        "MODERATE": "#facc15",
+        "HIGH": "#fb923c",
+        "CRITICAL": "#f87171",
+        "UNKNOWN": "#94a3b8",
+    }
+    bar_colors = [_risk_color.get(m["latest_risk"], "#94a3b8") for m in visible_fleet]
+
+    if PLOTLY_AVAILABLE:
+        # Chart 1 — Latest vs Average vs Peak risk comparison
+        chart1, chart2 = st.columns(2)
+
+        with chart1:
+            st.markdown(
+                '<div class="section-description">Latest vs Average vs Peak Failure Risk (%)</div>',
+                unsafe_allow_html=True
+            )
+            fig_cmp = go.Figure()
+            fig_cmp.add_trace(go.Bar(
+                name="Latest Risk",
+                x=machine_ids,
+                y=latest_risks,
+                marker_color=bar_colors,
+                hovertemplate="<b>%{x}</b><br>Latest: %{y:.1f}%<extra></extra>",
+            ))
+            fig_cmp.add_trace(go.Scatter(
+                name="Avg Risk",
+                x=machine_ids,
+                y=avg_risks,
+                mode="lines+markers",
+                line=dict(color="#38bdf8", width=2.5, dash="dot"),
+                marker=dict(size=8, color="#38bdf8"),
+                hovertemplate="<b>%{x}</b><br>Avg: %{y:.1f}%<extra></extra>",
+            ))
+            fig_cmp.add_trace(go.Scatter(
+                name="Peak Risk",
+                x=machine_ids,
+                y=peak_risks,
+                mode="markers",
+                marker=dict(size=12, color="#f59e0b", symbol="diamond"),
+                hovertemplate="<b>%{x}</b><br>Peak: %{y:.1f}%<extra></extra>",
+            ))
+            fig_cmp.add_hline(
+                y=35.0,
+                line_dash="dash",
+                line_color="#f59e0b",
+                line_width=2,
+                annotation_text="35% Alert Threshold",
+                annotation_position="top right",
+                annotation_font=dict(size=11, color="#f59e0b"),
+            )
+            fig_cmp.update_layout(
+                height=350,
+                template="plotly_dark",
+                paper_bgcolor="rgba(15,23,42,0.4)",
+                plot_bgcolor="rgba(30,41,59,0.5)",
+                margin=dict(l=40, r=20, t=20, b=40),
+                legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+                xaxis_title="Machine ID",
+                yaxis_title="Failure Risk (%)",
+            )
+            try:
+                st.plotly_chart(fig_cmp, width="stretch")
+            except TypeError:
+                st.plotly_chart(fig_cmp, use_container_width=True)
+
+        # Chart 2 — Tool wear bar chart
+        with chart2:
+            st.markdown(
+                '<div class="section-description">Current Tool Wear (min) per Machine</div>',
+                unsafe_allow_html=True
+            )
+            fig_wear = go.Figure(go.Bar(
+                x=machine_ids,
+                y=tool_wears,
+                marker_color="#38bdf8",
+                marker_line_color="#0284c7",
+                marker_line_width=1.5,
+                hovertemplate="<b>%{x}</b><br>Tool Wear: %{y:.0f} min<extra></extra>",
+            ))
+            fig_wear.update_layout(
+                height=350,
+                template="plotly_dark",
+                paper_bgcolor="rgba(15,23,42,0.4)",
+                plot_bgcolor="rgba(30,41,59,0.5)",
+                margin=dict(l=40, r=20, t=20, b=40),
+                xaxis_title="Machine ID",
+                yaxis_title="Tool Wear (min)",
+            )
+            try:
+                st.plotly_chart(fig_wear, width="stretch")
+            except TypeError:
+                st.plotly_chart(fig_wear, use_container_width=True)
+
+        # Chart 3 — Risk distribution pie
+        st.markdown(
+            '<div class="section-description" style="margin-top:16px;">Fleet Risk Level Distribution</div>',
+            unsafe_allow_html=True
+        )
+        risk_distribution: dict[str, int] = {}
+        for m in visible_fleet:
+            risk_distribution[m["latest_risk"]] = risk_distribution.get(m["latest_risk"], 0) + 1
+
+        pie_col, scatter_col = st.columns(2)
+
+        with pie_col:
+            pie_labels = list(risk_distribution.keys())
+            pie_values = list(risk_distribution.values())
+            pie_colors = [_risk_color.get(r, "#94a3b8") for r in pie_labels]
+            fig_pie = go.Figure(go.Pie(
+                labels=pie_labels,
+                values=pie_values,
+                marker=dict(colors=pie_colors, line=dict(color="#0f172a", width=2)),
+                hole=0.4,
+                hovertemplate="<b>%{label}</b><br>%{value} machines (%{percent})<extra></extra>",
+                textinfo="label+value",
+            ))
+            fig_pie.update_layout(
+                height=320,
+                template="plotly_dark",
+                paper_bgcolor="rgba(15,23,42,0.4)",
+                margin=dict(l=20, r=20, t=20, b=20),
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+            )
+            try:
+                st.plotly_chart(fig_pie, width="stretch")
+            except TypeError:
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+        # Chart 4 — Scatter: tool wear vs latest failure risk (bubble = checks)
+        with scatter_col:
+            st.markdown(
+                '<span style="color:#9fb2c8;font-size:13px;">'
+                'Tool Wear vs Failure Risk — bubble size = number of checks'
+                '</span>',
+                unsafe_allow_html=True
+            )
+            bubble_sizes = [max(m["total_checks"] * 6, 10) for m in visible_fleet]
+            fig_scatter = go.Figure(go.Scatter(
+                x=tool_wears,
+                y=latest_risks,
+                mode="markers+text",
+                text=machine_ids,
+                textposition="top center",
+                textfont=dict(size=10, color="#e2e8f0"),
+                marker=dict(
+                    size=bubble_sizes,
+                    color=latest_risks,
+                    colorscale=[
+                        [0.0, "#4ade80"],
+                        [0.35, "#facc15"],
+                        [0.6, "#fb923c"],
+                        [1.0, "#f87171"],
+                    ],
+                    cmin=0,
+                    cmax=100,
+                    showscale=True,
+                    colorbar=dict(title="Risk %", thickness=12, len=0.8),
+                    line=dict(width=1, color="#0f172a"),
+                ),
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "Tool Wear: %{x:.0f} min<br>"
+                    "Failure Risk: %{y:.1f}%<extra></extra>"
+                ),
+            ))
+            fig_scatter.add_hline(
+                y=35.0,
+                line_dash="dash",
+                line_color="#f59e0b",
+                line_width=1.8,
+                annotation_text="35% threshold",
+                annotation_font=dict(size=10, color="#f59e0b"),
+            )
+            fig_scatter.update_layout(
+                height=320,
+                template="plotly_dark",
+                paper_bgcolor="rgba(15,23,42,0.4)",
+                plot_bgcolor="rgba(30,41,59,0.5)",
+                margin=dict(l=50, r=60, t=10, b=40),
+                xaxis_title="Tool Wear (min)",
+                yaxis_title="Failure Risk (%)",
+            )
+            try:
+                st.plotly_chart(fig_scatter, width="stretch")
+            except TypeError:
+                st.plotly_chart(fig_scatter, use_container_width=True)
+
+    else:
+        # Fallback if Plotly is unavailable
+        st.caption("Install plotly>=5.18.0 for interactive charts.")
+        df_fleet = pd.DataFrame({
+            "Machine": machine_ids,
+            "Latest Risk (%)": latest_risks,
+            "Avg Risk (%)": avg_risks,
+            "Tool Wear (min)": tool_wears,
+        }).set_index("Machine")
+        st.bar_chart(df_fleet[["Latest Risk (%)", "Avg Risk (%)"]])
+
+    # ── Per-machine degradation chart selector ───────────────────────────────
+    st.markdown("---")
+    st.markdown(
+        '<div class="section-heading">📈 Individual Asset Degradation Deep-Dive</div>'
+        '<div class="section-description">'
+        'Select any machine to view its full chronological failure probability '
+        'and tool wear trend charts.'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+    deep_col, info_col = st.columns([1, 2])
+    with deep_col:
+        selected_machine = st.selectbox(
+            "Select Machine for Deep-Dive",
+            machine_ids,
+            key="fleet_deep_machine"
+        )
+    with info_col:
+        for m in visible_fleet:
+            if m["machine_id"] == selected_machine:
+                arrow, arrow_color, arrow_label = _trend(m["first_failure_pct"], m["latest_failure_pct"])
+                st.markdown(
+                    f'<div style="margin-top:28px;">'
+                    f'<span class="fleet-risk-badge {_risk_badge_class.get(m["latest_risk"], "fleet-risk-UNKNOWN")}">'
+                    f'{m["latest_risk"]}</span>&nbsp;&nbsp;'
+                    f'<span style="color:{arrow_color};font-weight:800;">{arrow} {escape(arrow_label)}</span>'
+                    f'&nbsp;&nbsp;<span style="color:#64748b;font-size:12px;">— {m["total_checks"]} checks logged</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+                break
+
+    trend_data = get_machine_trend(user_id, selected_machine)
+    if not trend_data:
+        st.info(f"No trend data found for **{selected_machine}**.")
+    else:
+        tc1, tc2, tc3, tc4 = st.columns(4)
+        first_r, latest_r = trend_data[0], trend_data[-1]
+        risk_delta_deep = latest_r["failure_percentage"] - first_r["failure_percentage"]
+        wear_delta_deep = latest_r["tool_wear"] - first_r["tool_wear"]
+        tc1.metric("Checks Logged", len(trend_data))
+        tc2.metric(
+            "Latest Risk",
+            f"{latest_r['failure_percentage']:.1f}%",
+            delta=f"{risk_delta_deep:+.1f}% vs first" if len(trend_data) > 1 else None,
+            delta_color="inverse"
+        )
+        tc3.metric(
+            "Tool Wear",
+            f"{latest_r['tool_wear']:.0f} min",
+            delta=f"{wear_delta_deep:+.0f} min" if len(trend_data) > 1 else None,
+            delta_color="inverse"
+        )
+        tc4.metric("Peak Risk", f"{max(r['failure_percentage'] for r in trend_data):.1f}%")
+
+        render_asset_trend_chart(selected_machine, trend_data)
+
+    # ── Summary table (sortable) ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(
+        '<div class="section-heading">📋 Fleet Summary Table</div>',
+        unsafe_allow_html=True
+    )
+    render_table(
+        ["Machine ID", "Risk Level", "Latest Risk %", "Avg Risk %", "Peak Risk %",
+         "Checks", "Failures", "Tool Wear (min)", "Last Check"],
+        [
+            (
+                m["machine_id"],
+                m["latest_risk"],
+                f"{m['latest_failure_pct']:.1f}%",
+                f"{m['avg_failure_pct']:.1f}%",
+                f"{m['peak_failure_pct']:.1f}%",
+                m["total_checks"],
+                m["failure_checks"],
+                f"{m['latest_tool_wear']:.0f}",
+                m["last_check_at"][:16] if m["last_check_at"] else "—",
+            )
+            for m in visible_fleet
+        ]
+    )
+
+
 def render_history_page(user_id):
     """Per-user prediction history with filters, details, comparison and CSV export."""
 
@@ -730,28 +1420,45 @@ def render_history_page(user_id):
     st.markdown(
         '<div class="section-heading">Filter Records</div>'
         '<div class="section-description">'
-        'Narrow the history by risk level, outcome, or number of rows.'
+        'Narrow the history by machine asset, risk level, outcome, or number of rows.'
         '</div>',
         unsafe_allow_html=True
     )
 
-    f1, f2, f3 = st.columns(3)
+    distinct_machines = get_distinct_machines(user_id)
+    all_machine_ids = sorted(
+        list(
+            {p.get("machine_id", "UNASSIGNED") for p in predictions if p.get("machine_id")}
+            | set(distinct_machines)
+        )
+    )
+    if not all_machine_ids:
+        all_machine_ids = ["UNASSIGNED"]
+
+    f1, f2, f3, f4 = st.columns(4)
 
     with f1:
+        machine_filter = st.selectbox(
+            "Machine ID",
+            ["All"] + all_machine_ids,
+            key="history_machine_filter"
+        )
+
+    with f2:
         risk_filter = st.selectbox(
             "Risk level",
             ["All", "LOW", "MODERATE", "HIGH", "CRITICAL"],
             key="history_risk_filter"
         )
 
-    with f2:
+    with f3:
         outcome_filter = st.selectbox(
             "Outcome",
             ["All", "Failure", "Normal"],
             key="history_outcome_filter"
         )
 
-    with f3:
+    with f4:
         limit_choice = st.selectbox(
             "Rows to show",
             [10, 25, 50, 100, "All"],
@@ -760,6 +1467,9 @@ def render_history_page(user_id):
         )
 
     filtered = predictions
+
+    if machine_filter != "All":
+        filtered = [p for p in filtered if p.get("machine_id") == machine_filter]
 
     if risk_filter != "All":
         filtered = [p for p in filtered if p["risk_level"] == risk_filter]
@@ -780,6 +1490,7 @@ def render_history_page(user_id):
         [
             "ID",
             "Date & Time",
+            "Machine ID",
             "Scenario",
             "Failure Probability",
             "Risk Level",
@@ -789,6 +1500,7 @@ def render_history_page(user_id):
             [
                 p["id"],
                 p["created_at"],
+                p.get("machine_id", "UNASSIGNED"),
                 p["scenario"] or "Custom Input",
                 f'{p["failure_percentage"]:.1f}%',
                 p["risk_level"],
@@ -798,12 +1510,72 @@ def render_history_page(user_id):
         ]
     )
 
+    # ASSET DEGRADATION TREND CHARTS
+    st.markdown("---")
+    st.markdown(
+        '<div class="section-heading">📈 Asset Degradation & Telemetry Trend</div>'
+        '<div class="section-description">'
+        'Track failure probability escalation and cutting tool wear over time for individual equipment assets.'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+    target_machine = (
+        machine_filter
+        if machine_filter != "All"
+        else (all_machine_ids[0] if all_machine_ids else "UNASSIGNED")
+    )
+
+    col_trend_sel, col_trend_info = st.columns([1, 2])
+    with col_trend_sel:
+        selected_trend_machine = st.selectbox(
+            "Select Asset for Trend Analysis",
+            all_machine_ids,
+            index=all_machine_ids.index(target_machine) if target_machine in all_machine_ids else 0,
+            key="trend_machine_select"
+        )
+    with col_trend_info:
+        st.caption(
+            "Visualizes chronological failure risk against the 35% operational alert threshold "
+            "and cutting tool wear progression."
+        )
+
+    trend_records = get_machine_trend(user_id, selected_trend_machine)
+    if not trend_records:
+        st.info(f"No telemetry check history found for machine **{selected_trend_machine}**.")
+    else:
+        total_checks = len(trend_records)
+        first_check = trend_records[0]
+        latest_check = trend_records[-1]
+
+        risk_delta = latest_check["failure_percentage"] - first_check["failure_percentage"]
+        wear_delta = latest_check["tool_wear"] - first_check["tool_wear"]
+        peak_risk = max(r["failure_percentage"] for r in trend_records)
+
+        tm1, tm2, tm3, tm4 = st.columns(4)
+        tm1.metric("Total Checks Logged", total_checks)
+        tm2.metric(
+            "Latest Failure Risk",
+            f"{latest_check['failure_percentage']:.1f}%",
+            delta=f"{risk_delta:+.1f}% vs first" if total_checks > 1 else None,
+            delta_color="inverse"
+        )
+        tm3.metric(
+            "Current Tool Wear",
+            f"{latest_check['tool_wear']:.0f} min",
+            delta=f"{wear_delta:+.0f} min" if total_checks > 1 else None,
+            delta_color="inverse"
+        )
+        tm4.metric("Peak Risk Observed", f"{peak_risk:.1f}%")
+
+        render_asset_trend_chart(selected_trend_machine, trend_records)
+
     # CSV EXPORT
 
     csv_buffer = io.StringIO()
     writer = csv.writer(csv_buffer)
     writer.writerow([
-        "ID", "Date & Time", "Scenario",
+        "ID", "Date & Time", "Machine ID", "Scenario",
         "Air Temperature (K)", "Process Temperature (K)",
         "Rotational Speed (RPM)", "Torque (Nm)", "Tool Wear (Minutes)",
         "Failure Probability (%)", "Risk Level", "Prediction Code",
@@ -814,6 +1586,7 @@ def render_history_page(user_id):
         writer.writerow([
             p["id"],
             p["created_at"],
+            p.get("machine_id", "UNASSIGNED"),
             p["scenario"],
             p["air_temperature"],
             p["process_temperature"],
@@ -845,7 +1618,7 @@ def render_history_page(user_id):
     )
 
     records_by_label = {
-        f'#{p["id"]} · {p["created_at"]} · {p["failure_percentage"]:.1f}% · {p["risk_level"]}': p
+        f'#{p["id"]} · {p.get("machine_id", "UNASSIGNED")} · {p["created_at"]} · {p["failure_percentage"]:.1f}% · {p["risk_level"]}': p
         for p in predictions
     }
 
@@ -857,7 +1630,8 @@ def render_history_page(user_id):
 
     record = records_by_label[selected_label]
 
-    d1, d2, d3 = st.columns(3)
+    d0, d1, d2, d3 = st.columns(4)
+    d0.metric("Machine ID", record.get("machine_id", "UNASSIGNED"))
     d1.metric("Failure Probability", f'{record["failure_percentage"]:.2f}%')
     d2.metric("Risk Level", record["risk_level"])
     d3.metric("Scenario", record["scenario"] or "Custom Input")
@@ -876,6 +1650,7 @@ def render_history_page(user_id):
     render_table(
         ["Sensor Parameter", "Reading"],
         [
+            ("Machine / Asset ID", record.get("machine_id", "UNASSIGNED")),
             ("Air Temperature (K)", f'{record["air_temperature"]:.1f}'),
             ("Process Temperature (K)", f'{record["process_temperature"]:.1f}'),
             ("Rotational Speed (RPM)", f'{record["rotational_speed"]:.0f}'),
@@ -927,6 +1702,12 @@ def render_history_page(user_id):
         render_table(
             ["Field", "Prediction A", "Prediction B", "Difference"],
             [
+                (
+                    "Machine / Asset ID",
+                    a.get("machine_id", "UNASSIGNED"),
+                    b.get("machine_id", "UNASSIGNED"),
+                    "Same" if a.get("machine_id") == b.get("machine_id") else "Different"
+                ),
                 (
                     "Failure Probability",
                     f'{a["failure_percentage"]:.2f}%',
@@ -1352,6 +2133,7 @@ def render_batch_page(user_id):
     ):
         records = [
             {
+                "machine_id": str(row.machine_id),
                 "scenario": f"Batch upload · {row.machine_id}",
                 "air_temperature": row.air_temperature,
                 "process_temperature": row.process_temperature,
@@ -1458,6 +2240,7 @@ page = st.sidebar.radio(
     "Select Page",
     [
         "Prediction Dashboard",
+        "Fleet Overview",
         "Batch Prediction",
         "Prediction History",
         "User Profile",
@@ -1594,10 +2377,20 @@ if page == "Prediction Dashboard":
         "Temperature Anomaly": (303.8, 311.2, 1320.0, 52.0, 140.0)
     }
 
-    selected = st.selectbox(
-        "Select Sample Machine Scenario",
-        list(scenarios.keys())
-    )
+    col_scen, col_mid = st.columns([1, 1])
+    with col_scen:
+        selected = st.selectbox(
+            "Select Sample Machine Scenario",
+            list(scenarios.keys())
+        )
+    with col_mid:
+        single_machine_id = st.text_input(
+            "Machine / Asset ID",
+            value="MILL-01",
+            placeholder="MILL-01",
+            help="Unique asset identifier for equipment tracking (e.g. MILL-01, CNC-4)",
+            key="single_machine_id"
+        )
 
     defaults = scenarios[selected]
 
@@ -1713,6 +2506,7 @@ if page == "Prediction Dashboard":
                         tool_wear=tool_wear
                     )
 
+                normalized_mid = normalize_machine_id(single_machine_id)
                 try:
                     save_prediction(
                         user_id=st.session_state["user"]["id"],
@@ -1722,7 +2516,8 @@ if page == "Prediction Dashboard":
                         rotational_speed=rotational_speed,
                         torque=torque,
                         tool_wear=tool_wear,
-                        result=result
+                        result=result,
+                        machine_id=normalized_mid,
                     )
                     saved_to_history = True
                     save_error_message = ""
@@ -1755,6 +2550,7 @@ if page == "Prediction Dashboard":
                         f'<div class="failure-result">'
                         f'<div class="result-title">⚠️ FAILURE PREDICTED</div>'
                         f'<div class="result-description">'
+                        f'Asset ID: <b>{escape(normalized_mid)}</b> &nbsp;|&nbsp; '
                         f'Risk Level: <b>{risk}</b><br>'
                         f'Potential equipment failure pattern detected. '
                         f'Please inspect the machine.'
@@ -1768,6 +2564,7 @@ if page == "Prediction Dashboard":
                         f'<div class="success-result">'
                         f'<div class="result-title">✅ NORMAL OPERATION</div>'
                         f'<div class="result-description">'
+                        f'Asset ID: <b>{escape(normalized_mid)}</b> &nbsp;|&nbsp; '
                         f'Risk Level: <b>{risk}</b><br>'
                         f'The machine is classified as normal by the prediction model.'
                         f'</div></div>',
@@ -1776,7 +2573,17 @@ if page == "Prediction Dashboard":
 
                 # RESULT METRICS
 
-                r1, r2, r3 = st.columns(3)
+                r0, r1, r2, r3 = st.columns(4)
+
+                with r0:
+
+                    st.markdown(
+                        f'<div class="result-card">'
+                        f'<div class="result-label">MACHINE / ASSET ID</div>'
+                        f'<div class="result-value">{escape(normalized_mid)}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
 
                 with r1:
 
@@ -1921,6 +2728,15 @@ if page == "Prediction Dashboard":
 elif page == "Batch Prediction":
 
     render_batch_page(st.session_state["user"]["id"])
+
+
+# =========================================================
+# FLEET OVERVIEW DASHBOARD
+# =========================================================
+
+elif page == "Fleet Overview":
+
+    render_fleet_page(st.session_state["user"]["id"])
 
 
 # =========================================================
