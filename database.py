@@ -83,6 +83,7 @@ def _connection() -> Iterator[sqlite3.Connection]:
 
 def init_db() -> None:
     """Create the schema if it does not exist. Safe to call on every run."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _connection() as conn:
         conn.executescript(SCHEMA)
         # Backward-compatible check for legacy databases without machine_id

@@ -114,8 +114,18 @@ class EquipmentFailurePredictor:
     def __init__(self, model_dir: Union[str, Path] = None):
         if model_dir is None:
             current_dir = Path.cwd().resolve()
-            ml_dir = current_dir if current_dir.name == "ml" else (current_dir / "ml" if (current_dir / "ml").is_dir() else Path(__file__).resolve().parent.parent)
-            model_dir = ml_dir / "models" / "best_model"
+            src_dir = Path(__file__).resolve().parent
+            candidates = [
+                current_dir / "ml" / "models" / "best_model",
+                current_dir / "models" / "best_model",
+                src_dir.parent / "models" / "best_model",
+                src_dir.parent.parent / "ml" / "models" / "best_model",
+                src_dir.parent.parent / "Random_Forest_Equipment_Failure_Model" / "model",
+            ]
+            model_dir = next(
+                (p for p in candidates if (p / "ai4i_failure_model.joblib").exists()),
+                candidates[0],
+            )
         else:
             model_dir = Path(model_dir)
 
