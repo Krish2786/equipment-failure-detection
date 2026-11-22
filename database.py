@@ -1,14 +1,13 @@
 """
-SQLite storage for MachineGuard users and prediction history.
-=============================================================
+Database storage for MachineGuard users and prediction history.
+==============================================================
+
+Supports dual backends:
+1. Supabase PostgreSQL when DATABASE_URL is configured (via environment variable
+   or Streamlit secrets).
+2. Local SQLite fallback (data/machineguard.db) for offline development and testing.
 
 Passwords are stored as salted PBKDF2-HMAC-SHA256 hashes, never as plain text.
-The database lives at ``data/machineguard.db`` by default. Set the
-``MACHINEGUARD_DB_PATH`` environment variable to use a different file (the tests
-do this to keep the real database untouched).
-
-This is intentionally small and dependency-free: SQLite, hashlib, secrets and
-hmac all ship with Python.
 """
 
 from __future__ import annotations
@@ -22,6 +21,17 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    from psycopg2 import IntegrityError as PGIntegrityError
+    HAS_PSYCOPG2 = True
+except ImportError:
+    HAS_PSYCOPG2 = False
+    RealDictCursor = None
+    class PGIntegrityError(Exception):
+        pass
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("MACHINEGUARD_DB_PATH", PROJECT_ROOT / "data" / "machineguard.db"))
@@ -64,39 +74,153 @@ CREATE INDEX IF NOT EXISTS idx_predictions_user_created
     ON predictions (user_id, created_at DESC);
 """
 
+PG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id            SERIAL PRIMARY KEY,
+    name          TEXT    NOT NULL,
+    email         TEXT    NOT NULL UNIQUE,
+    password_hash TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS predictions (
+    id                   SERIAL PRIMARY KEY,
+    user_id              INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    machine_id           TEXT    DEFAULT 'UNASSIGNED',
+    created_at           TEXT    NOT NULL,
+    scenario             TEXT,
+    air_temperature      DOUBLE PRECISION NOT NULL,
+    process_temperature  DOUBLE PRECISION NOT NULL,
+    rotational_speed     DOUBLE PRECISION NOT NULL,
+    torque               DOUBLE PRECISION NOT NULL,
+    tool_wear            DOUBLE PRECISION NOT NULL,
+    failure_probability  DOUBLE PRECISION NOT NULL,
+    failure_percentage   DOUBLE PRECISION NOT NULL,
+    prediction_code      INTEGER NOT NULL,
+    risk_level           TEXT    NOT NULL,
+    decision_threshold   DOUBLE PRECISION NOT NULL,
+    recommended_action   TEXT,
+    model_name           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_predictions_user_created
+    ON predictions (user_id, created_at DESC);
+"""
+
+
+def get_database_url() -> str | None:
+    """Return configured database connection string from environment or Streamlit secrets."""
+    url = os.getenv("DATABASE_URL")
+    if url and url.strip():
+        return url.strip()
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and "DATABASE_URL" in st.secrets:
+            val = st.secrets["DATABASE_URL"]
+            if val and str(val).strip():
+                return str(val).strip()
+    except Exception:
+        pass
+    return None
+
+
+class DatabaseSession:
+    """Unified wrapper around SQLite and PostgreSQL connections and queries."""
+
+    def __init__(self, is_pg: bool, conn: Any):
+        self.is_pg = is_pg
+        self.conn = conn
+
+    def execute(self, sql: str, params: tuple | list = ()):
+        if self.is_pg:
+            pg_sql = sql.replace("?", "%s")
+            cur = self.conn.cursor()
+            cur.execute(pg_sql, params)
+            return cur
+        else:
+            return self.conn.execute(sql, params)
+
+    def executemany(self, sql: str, params_seq):
+        if self.is_pg:
+            pg_sql = sql.replace("?", "%s")
+            cur = self.conn.cursor()
+            cur.executemany(pg_sql, params_seq)
+            return cur
+        else:
+            return self.conn.executemany(sql, params_seq)
+
+    def executescript(self, script: str):
+        if self.is_pg:
+            cur = self.conn.cursor()
+            cur.execute(script)
+            return cur
+        else:
+            return self.conn.executescript(script)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.conn, name)
+
 
 @contextmanager
-def _connection() -> Iterator[sqlite3.Connection]:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+def _connection() -> Iterator[DatabaseSession]:
+    db_url = get_database_url()
+    if db_url:
+        if not HAS_PSYCOPG2:
+            raise RuntimeError(
+                "DATABASE_URL is set but psycopg2 is not installed. "
+                "Please run `pip install psycopg2-binary`."
+            )
+        conn = psycopg2.connect(db_url, sslmode="require", cursor_factory=RealDictCursor)
+        try:
+            yield DatabaseSession(is_pg=True, conn=conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    else:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            yield DatabaseSession(is_pg=False, conn=conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def init_db() -> None:
     """Create the schema if it does not exist. Safe to call on every run."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _connection() as conn:
-        conn.executescript(SCHEMA)
-        # Backward-compatible check for legacy databases without machine_id
-        cursor = conn.execute("PRAGMA table_info(predictions)")
-        columns = [row["name"] for row in cursor.fetchall()]
-        if "machine_id" not in columns:
-            conn.execute(
-                "ALTER TABLE predictions ADD COLUMN machine_id TEXT DEFAULT 'UNASSIGNED'"
+        if conn.is_pg:
+            cur = conn.conn.cursor()
+            cur.execute(PG_SCHEMA)
+            cur.execute(
+                "ALTER TABLE predictions ADD COLUMN IF NOT EXISTS machine_id TEXT DEFAULT 'UNASSIGNED'"
             )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_predictions_user_machine "
-            "ON predictions (user_id, machine_id, created_at)"
-        )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_predictions_user_machine "
+                "ON predictions (user_id, machine_id, created_at)"
+            )
+        else:
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            conn.conn.executescript(SCHEMA)
+            # Backward-compatible check for legacy databases without machine_id
+            cursor = conn.conn.execute("PRAGMA table_info(predictions)")
+            columns = [row["name"] for row in cursor.fetchall()]
+            if "machine_id" not in columns:
+                conn.conn.execute(
+                    "ALTER TABLE predictions ADD COLUMN machine_id TEXT DEFAULT 'UNASSIGNED'"
+                )
+            conn.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_predictions_user_machine "
+                "ON predictions (user_id, machine_id, created_at)"
+            )
 
 
 def normalize_machine_id(machine_id: Any) -> str:
@@ -143,12 +267,12 @@ def verify_password(password: str, stored: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _row_to_user(row: sqlite3.Row) -> dict[str, Any]:
+def _row_to_user(row: Any) -> dict[str, Any]:
     return {
         "id": row["id"],
         "name": row["name"],
         "email": row["email"],
-        "created_at": row["created_at"],
+        "created_at": str(row["created_at"]),
     }
 
 
@@ -173,15 +297,17 @@ def create_user(name: str, email: str, password: str) -> dict[str, Any]:
                 """
                 INSERT INTO users (name, email, password_hash, created_at)
                 VALUES (?, ?, ?, ?)
+                RETURNING id
                 """,
                 (name, email, hash_password(password), created_at),
             )
-            user_id = int(cursor.lastrowid)
+            inserted = cursor.fetchone()
+            user_id = int(inserted["id"] if (isinstance(inserted, dict) or hasattr(inserted, "keys")) else inserted[0])
             row = conn.execute(
                 "SELECT id, name, email, created_at FROM users WHERE id = ?",
                 (user_id,),
             ).fetchone()
-    except sqlite3.IntegrityError as exc:
+    except (sqlite3.IntegrityError, PGIntegrityError) as exc:
         raise ValueError("An account with this email already exists.") from exc
 
     return _row_to_user(row)
@@ -237,6 +363,7 @@ def save_prediction(
                 failure_probability, failure_percentage, prediction_code, risk_level,
                 decision_threshold, recommended_action, model_name
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
             """,
             (
                 user_id,
@@ -257,7 +384,8 @@ def save_prediction(
                 (result.get("model_provenance") or {}).get("model_name"),
             ),
         )
-        return int(cursor.lastrowid)
+        inserted = cursor.fetchone()
+        return int(inserted["id"] if (isinstance(inserted, dict) or hasattr(inserted, "keys")) else inserted[0])
 
 
 def save_predictions_bulk(

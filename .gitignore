@@ -14,6 +14,10 @@ data/*.sqlite3
 .env.development.local
 !.env.example
 
+# Streamlit secrets and configuration
+.streamlit/secrets.toml
+.streamlit/
+
 # Byte-compiled / optimized / DLL files (Python)
 __pycache__/
 *.py[codz]
