@@ -17,6 +17,7 @@ import hmac
 import os
 import secrets
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -26,11 +27,14 @@ try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
     from psycopg2 import IntegrityError as PGIntegrityError
+    from psycopg2.errors import DeadlockDetected as PGDeadlockDetected
     HAS_PSYCOPG2 = True
 except ImportError:
     HAS_PSYCOPG2 = False
     RealDictCursor = None
     class PGIntegrityError(Exception):
+        pass
+    class PGDeadlockDetected(Exception):
         pass
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -196,31 +200,54 @@ def _connection() -> Iterator[DatabaseSession]:
 
 def init_db() -> None:
     """Create the schema if it does not exist. Safe to call on every run."""
-    with _connection() as conn:
-        if conn.is_pg:
-            cur = conn.conn.cursor()
-            cur.execute(PG_SCHEMA)
-            cur.execute(
-                "ALTER TABLE predictions ADD COLUMN IF NOT EXISTS machine_id TEXT DEFAULT 'UNASSIGNED'"
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS idx_predictions_user_machine "
-                "ON predictions (user_id, machine_id, created_at)"
-            )
-        else:
-            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            conn.conn.executescript(SCHEMA)
-            # Backward-compatible check for legacy databases without machine_id
-            cursor = conn.conn.execute("PRAGMA table_info(predictions)")
-            columns = [row["name"] for row in cursor.fetchall()]
-            if "machine_id" not in columns:
-                conn.conn.execute(
-                    "ALTER TABLE predictions ADD COLUMN machine_id TEXT DEFAULT 'UNASSIGNED'"
-                )
-            conn.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_predictions_user_machine "
-                "ON predictions (user_id, machine_id, created_at)"
-            )
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with _connection() as conn:
+                if conn.is_pg:
+                    cur = conn.conn.cursor()
+                    # 1. Acquire transaction-scoped advisory lock to serialize concurrent worker DDL execution
+                    cur.execute("SELECT pg_advisory_xact_lock(78234106);")
+                    cur.execute(PG_SCHEMA)
+
+                    # 2. Check information_schema before attempting ALTER TABLE
+                    cur.execute(
+                        """
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'predictions'
+                          AND column_name = 'machine_id'
+                        """
+                    )
+                    has_machine_id = cur.fetchone() is not None
+                    if not has_machine_id:
+                        cur.execute(
+                            "ALTER TABLE predictions ADD COLUMN IF NOT EXISTS machine_id TEXT DEFAULT 'UNASSIGNED'"
+                        )
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_predictions_user_machine "
+                        "ON predictions (user_id, machine_id, created_at)"
+                    )
+                else:
+                    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    conn.conn.executescript(SCHEMA)
+                    # Backward-compatible check for legacy databases without machine_id
+                    cursor = conn.conn.execute("PRAGMA table_info(predictions)")
+                    columns = [row["name"] for row in cursor.fetchall()]
+                    if "machine_id" not in columns:
+                        conn.conn.execute(
+                            "ALTER TABLE predictions ADD COLUMN machine_id TEXT DEFAULT 'UNASSIGNED'"
+                        )
+                    conn.conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_predictions_user_machine "
+                        "ON predictions (user_id, machine_id, created_at)"
+                    )
+            return
+        except PGDeadlockDetected:
+            if attempt < max_attempts:
+                time.sleep(0.2)
+            else:
+                raise
 
 
 def normalize_machine_id(machine_id: Any) -> str:

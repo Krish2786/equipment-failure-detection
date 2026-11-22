@@ -783,7 +783,13 @@ st.markdown(
 # AUTHENTICATION
 # =========================================================
 
-init_db()
+@st.cache_resource
+def initialize_database() -> bool:
+    init_db()
+    return True
+
+
+initialize_database()
 
 SESSION_DURATION = timedelta(hours=1)
 
