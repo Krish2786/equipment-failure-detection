@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 from model_prediction import diagnose_failure_mode
 
-MAX_BATCH_ROWS = 5000
+MAX_BATCH_ROWS = 10000
 
 SENSOR_FIELDS = [
     "air_temperature",
@@ -231,9 +231,18 @@ def build_batch_report(
     for field, source in mapping.items():
         working[field] = pd.to_numeric(df[source], errors="coerce")
 
-    errors = []
-    for _, row in working.iterrows():
-        errors.append(_validate_row(row))
+    # Fast vectorized row validation
+    bad_mask = pd.Series(False, index=working.index)
+    for field in SENSOR_FIELDS:
+        low, high = BOUNDS[field]
+        col = working[field]
+        bad_mask |= col.isna() | (col < low) | (col > high)
+    bad_mask |= working["process_temperature"] < working["air_temperature"]
+
+    errors: list[str | None] = [None] * len(working)
+    if bad_mask.any():
+        for idx in working.index[bad_mask]:
+            errors[working.index.get_loc(idx)] = _validate_row(working.loc[idx])
 
     working["error"] = errors
     working["status"] = ["Invalid" if error else "OK" for error in errors]
@@ -260,25 +269,46 @@ def build_batch_report(
         probabilities = predictor.model.predict_proba(model_input)[:, 1]
         threshold = float(predictor.threshold)
 
-        for index, probability in zip(valid_rows.index, probabilities):
-            probability = float(probability)
-            code, risk_level, action = classify_probability(probability, threshold)
+        # Vectorized risk level, prediction code, and recommended actions
+        pcts = np.round(probabilities * 100, 2)
+        conds = [
+            probabilities >= 0.70,
+            probabilities >= threshold,
+            probabilities >= 0.20,
+        ]
+        codes = np.select(conds, [1, 1, 0], default=0)
+        risk_levels = np.select(conds, ["CRITICAL", "HIGH", "MODERATE"], default="LOW")
+        actions = np.select(
+            conds,
+            [
+                "Immediate spindle shutdown and comprehensive mechanical inspection required.",
+                "Schedule preventive maintenance inspection before next production batch.",
+                "Telemetry elevated; increase sensor monitoring frequency.",
+            ],
+            default="Standard operational parameters; proceed with scheduled milling.",
+        )
+        maint_required = np.where(codes == 1, "YES", "NO")
 
-            working.at[index, "failure_probability"] = probability
-            working.at[index, "failure_percentage"] = round(probability * 100, 2)
-            working.at[index, "prediction_code"] = code
-            working.at[index, "risk_level"] = risk_level
-            working.at[index, "maintenance_required"] = "YES" if code == 1 else "NO"
-            working.at[index, "recommended_action"] = action
-            mode = diagnose_failure_mode(
-                valid_rows.at[index, "air_temperature"],
-                valid_rows.at[index, "process_temperature"],
-                valid_rows.at[index, "rotational_speed"],
-                valid_rows.at[index, "torque"],
-                valid_rows.at[index, "tool_wear"],
-            )
-            working.at[index, "failure_mode"] = mode["mode_label"]
-            working.at[index, "failure_mode_reason"] = mode["reason"]
+        a_arr = valid_rows["air_temperature"].to_numpy()
+        p_arr = valid_rows["process_temperature"].to_numpy()
+        r_arr = valid_rows["rotational_speed"].to_numpy()
+        t_arr = valid_rows["torque"].to_numpy()
+        w_arr = valid_rows["tool_wear"].to_numpy()
+
+        modes = [
+            diagnose_failure_mode(a, p, r, t, w)
+            for a, p, r, t, w in zip(a_arr, p_arr, r_arr, t_arr, w_arr)
+        ]
+
+        valid_idx = valid_rows.index
+        working.loc[valid_idx, "failure_probability"] = probabilities
+        working.loc[valid_idx, "failure_percentage"] = pcts
+        working.loc[valid_idx, "prediction_code"] = codes
+        working.loc[valid_idx, "risk_level"] = risk_levels
+        working.loc[valid_idx, "maintenance_required"] = maint_required
+        working.loc[valid_idx, "recommended_action"] = actions
+        working.loc[valid_idx, "failure_mode"] = [m["mode_label"] for m in modes]
+        working.loc[valid_idx, "failure_mode_reason"] = [m["reason"] for m in modes]
 
     working = working.sort_values(
         by=["failure_percentage", "row_number"],

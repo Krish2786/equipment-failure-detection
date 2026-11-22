@@ -158,6 +158,8 @@ def test_invalid_rows_are_reported_not_fatal() -> None:
 
 
 def test_empty_and_oversized_files() -> None:
+    assert MAX_BATCH_ROWS == 10000
+
     for frame in (pd.DataFrame(), pd.DataFrame({"torque": []})):
         try:
             build_batch_report(frame, PREDICTOR)
@@ -166,6 +168,21 @@ def test_empty_and_oversized_files() -> None:
         else:
             raise AssertionError("Expected ValueError for an empty upload")
 
+    # Verify that exactly 10,000 rows succeeds quickly
+    exact_limit = pd.DataFrame(
+        {
+            "air_temperature": [298.0] * MAX_BATCH_ROWS,
+            "process_temperature": [308.0] * MAX_BATCH_ROWS,
+            "rotational_speed": [1500] * MAX_BATCH_ROWS,
+            "torque": [40.0] * MAX_BATCH_ROWS,
+            "tool_wear": [10] * MAX_BATCH_ROWS,
+        }
+    )
+    report, summary = build_batch_report(exact_limit, PREDICTOR)
+    assert summary["total"] == 10000
+    assert summary["valid"] == 10000
+
+    # Verify that 10,001 rows triggers the limit validation error
     oversized = pd.DataFrame(
         {
             "air_temperature": [298.0] * (MAX_BATCH_ROWS + 1),
@@ -179,7 +196,9 @@ def test_empty_and_oversized_files() -> None:
     try:
         build_batch_report(oversized, PREDICTOR)
     except ValueError as exc:
-        assert "limit" in str(exc).lower()
+        message = str(exc).lower()
+        assert "limit" in message
+        assert "10,000" in message or "10000" in message
     else:
         raise AssertionError("Expected ValueError for too many rows")
 

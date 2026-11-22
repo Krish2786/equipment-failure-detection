@@ -32,8 +32,8 @@ The user-facing solution is delivered as an interactive **Streamlit** applicatio
     - Tool wear [min]
   - Visual probability gauges, classified risk levels (**LOW**, **MEDIUM**, **HIGH**), and quick-load operational scenario presets (Normal Operation, Overstrain, Heat Dissipation, Power Failure, Tool Wear).
 
-- **High-Throughput Batch CSV Scoring (Up to 5,000 Rows):**
-  - Drag-and-drop CSV ingestion capable of scoring entire equipment fleets (up to 5,000 machines per upload).
+- **High-Throughput Batch CSV Scoring (Up to 10,000 Rows):**
+  - Drag-and-drop CSV ingestion capable of scoring entire equipment fleets (up to 10,000 machines per upload).
   - Flexible column header resolution supporting standard names, snake_case, camelCase, and AI4I bracketed formats (e.g., `Air temperature [K]`, `Rotational speed [rpm]`).
   - Robust row validation that flags invalid rows without aborting the batch run.
   - Dual report exports: **Complete fleet assessment report** and **prioritized maintenance shortlist** sorted from highest to lowest failure risk.
