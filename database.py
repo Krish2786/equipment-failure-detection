@@ -496,6 +496,46 @@ def get_fleet_summary(user_id: int) -> list[dict[str, Any]]:
     return summaries
 
 
+def reassign_machine_id(
+    user_id: int,
+    old_machine_id: str,
+    new_machine_id: str,
+    prediction_ids: list[int] | None = None,
+) -> int:
+    """Update machine_id for records belonging to user_id.
+
+    If prediction_ids is provided, update only those specific record IDs.
+    Otherwise, update all records matching old_machine_id for user_id.
+    Returns the count of updated records.
+    """
+    norm_new = normalize_machine_id(new_machine_id)
+    norm_old = normalize_machine_id(old_machine_id)
+
+    with _connection() as conn:
+        if prediction_ids is not None:
+            if not prediction_ids:
+                return 0
+            placeholders = ",".join("?" for _ in prediction_ids)
+            cursor = conn.execute(
+                f"""
+                UPDATE predictions
+                SET machine_id = ?
+                WHERE user_id = ? AND id IN ({placeholders})
+                """,
+                [norm_new, user_id, *[int(i) for i in prediction_ids]],
+            )
+        else:
+            cursor = conn.execute(
+                """
+                UPDATE predictions
+                SET machine_id = ?
+                WHERE user_id = ? AND machine_id = ?
+                """,
+                (norm_new, user_id, norm_old),
+            )
+        return cursor.rowcount
+
+
 def clear_predictions(user_id: int) -> int:
     with _connection() as conn:
         cursor = conn.execute(

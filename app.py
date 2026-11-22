@@ -34,6 +34,7 @@ from database import (
     get_predictions,
     init_db,
     normalize_machine_id,
+    reassign_machine_id,
     save_prediction,
     save_predictions_bulk,
 )
@@ -1509,6 +1510,62 @@ def render_history_page(user_id):
             for p in filtered
         ]
     )
+
+    # UNASSIGNED ASSET REASSIGNMENT SECTION
+    unassigned_records = [p for p in predictions if p.get("machine_id") == "UNASSIGNED"]
+    if unassigned_records:
+        st.caption(
+            "Records labeled UNASSIGNED were logged before Asset ID tracking was enabled or uploaded without a Machine ID."
+        )
+        with st.expander("Assign Machine ID to UNASSIGNED Records"):
+            st.caption(
+                f"You have **{len(unassigned_records)}** record(s) labeled as `UNASSIGNED`. "
+                "Assign them to a real Machine ID to track their degradation trends and include them in Fleet Overview."
+            )
+            reassign_mode = st.radio(
+                "Records to reassign",
+                ["All UNASSIGNED records", "Specific record IDs"],
+                horizontal=True,
+                key="reassign_mode"
+            )
+
+            chosen_ids = None
+            if reassign_mode == "Specific record IDs":
+                id_choices = [p["id"] for p in unassigned_records]
+                chosen_ids = st.multiselect(
+                    "Select specific record IDs",
+                    options=id_choices,
+                    format_func=lambda pid: f"#{pid} ({next(p['created_at'] for p in unassigned_records if p['id'] == pid)} - {next(p['failure_percentage'] for p in unassigned_records if p['id'] == pid):.1f}%)",
+                    key="reassign_multiselect"
+                )
+
+            reassign_c1, reassign_c2 = st.columns([2, 1])
+            with reassign_c1:
+                target_mid = st.text_input(
+                    "Target Machine ID",
+                    placeholder="e.g. MILL-01, LATHE-02",
+                    help="Enter the unique Asset ID to assign to these records",
+                    key="reassign_target_mid"
+                )
+            with reassign_c2:
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                btn_reassign = st.button("Assign Asset ID", key="btn_reassign_asset", use_container_width=True)
+
+            if btn_reassign:
+                norm_new_id = normalize_machine_id(target_mid)
+                if not target_mid.strip() or norm_new_id == "UNASSIGNED":
+                    st.error("Please enter a valid, non-empty Machine ID.")
+                elif reassign_mode == "Specific record IDs" and not chosen_ids:
+                    st.error("Please select at least one record ID to reassign.")
+                else:
+                    updated_count = reassign_machine_id(
+                        user_id=user_id,
+                        old_machine_id="UNASSIGNED",
+                        new_machine_id=norm_new_id,
+                        prediction_ids=chosen_ids if reassign_mode == "Specific record IDs" else None
+                    )
+                    st.session_state["flash"] = f"Successfully assigned {updated_count} record(s) to machine '{norm_new_id}'."
+                    st.rerun()
 
     # ASSET DEGRADATION TREND CHARTS
     st.markdown("---")

@@ -407,6 +407,87 @@ def test_legacy_database_migration() -> None:
         temp_dir.cleanup()
 
 
+def test_reassign_machine_id() -> None:
+    database.init_db()
+    u1 = database.create_user("Reassign User 1", "reassign1@example.com", "pass123456")
+    u2 = database.create_user("Reassign User 2", "reassign2@example.com", "pass123456")
+
+    # u1 creates 3 predictions: 2 UNASSIGNED and 1 MILL-01
+    id1 = database.save_prediction(
+        user_id=u1["id"],
+        scenario="Legacy Run 1",
+        air_temperature=298.0,
+        process_temperature=308.0,
+        rotational_speed=1500,
+        torque=40.0,
+        tool_wear=20.0,
+        result=RESULT,
+        machine_id="UNASSIGNED",
+    )
+    id2 = database.save_prediction(
+        user_id=u1["id"],
+        scenario="Legacy Run 2",
+        air_temperature=299.0,
+        process_temperature=309.0,
+        rotational_speed=1500,
+        torque=40.0,
+        tool_wear=30.0,
+        result=RESULT,
+        machine_id="",  # defaults to UNASSIGNED
+    )
+    id3 = database.save_prediction(
+        user_id=u1["id"],
+        scenario="Active Run",
+        air_temperature=300.0,
+        process_temperature=310.0,
+        rotational_speed=1500,
+        torque=40.0,
+        tool_wear=40.0,
+        result=RESULT,
+        machine_id="MILL-01",
+    )
+
+    # u2 also creates an UNASSIGNED prediction
+    id_u2 = database.save_prediction(
+        user_id=u2["id"],
+        scenario="User 2 Run",
+        air_temperature=298.0,
+        process_temperature=308.0,
+        rotational_speed=1500,
+        torque=40.0,
+        tool_wear=20.0,
+        result=RESULT,
+        machine_id="UNASSIGNED",
+    )
+
+    # 1. Reassign specific prediction_id for u1
+    updated = database.reassign_machine_id(
+        user_id=u1["id"],
+        old_machine_id="UNASSIGNED",
+        new_machine_id="lathe-02",  # test normalization
+        prediction_ids=[id1],
+    )
+    assert updated == 1
+    assert database.get_prediction(u1["id"], id1)["machine_id"] == "LATHE-02"
+    assert database.get_prediction(u1["id"], id2)["machine_id"] == "UNASSIGNED"
+
+    # 2. Bulk reassign all remaining UNASSIGNED for u1
+    updated_bulk = database.reassign_machine_id(
+        user_id=u1["id"],
+        old_machine_id="UNASSIGNED",
+        new_machine_id="CNC-99",
+        prediction_ids=None,
+    )
+    assert updated_bulk == 1
+    assert database.get_prediction(u1["id"], id2)["machine_id"] == "CNC-99"
+    # id3 (MILL-01) and id1 (LATHE-02) should be untouched
+    assert database.get_prediction(u1["id"], id1)["machine_id"] == "LATHE-02"
+    assert database.get_prediction(u1["id"], id3)["machine_id"] == "MILL-01"
+
+    # 3. User isolation: verify u2's UNASSIGNED record was not modified
+    assert database.get_prediction(u2["id"], id_u2)["machine_id"] == "UNASSIGNED"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, case in sorted(globals().items()):

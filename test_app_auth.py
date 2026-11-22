@@ -79,20 +79,39 @@ def main() -> None:
     _assert_clean(at, "Prediction")
     print("PASS prediction runs with asset ID", flush=True)
 
-    # 5. Open Prediction History and verify the saved row appears.
+    # 4b. Run a prediction with blank asset ID (becomes UNASSIGNED)
+    print("[4b] Running prediction without asset ID...", flush=True)
+    if any(item.key == "single_machine_id" for item in at.text_input):
+        _text_input(at, "single_machine_id").set_value("")
+    _button(at, "🔍 PREDICT EQUIPMENT FAILURE").click()
+    at.run()
+    _assert_clean(at, "Unassigned prediction")
+    print("PASS unassigned prediction runs", flush=True)
+
+    # 5. Open Prediction History and verify the saved rows appear and UNASSIGNED reassign works.
     print("[5] Opening Prediction History...", flush=True)
     at.sidebar.radio[0].set_value("Prediction History")
     at.run()
     _assert_clean(at, "Prediction History page")
 
     metrics = {metric.label: metric.value for metric in at.metric}
-    assert metrics.get("Total Predictions") == "1", metrics
-    assert metrics.get("Failure Alerts") == "1", metrics
+    assert metrics.get("Total Predictions") == "2", metrics
+    assert metrics.get("Failure Alerts") == "2", metrics
 
     select_keys = [s.key for s in at.selectbox]
     assert "history_machine_filter" in select_keys, select_keys
     assert "trend_machine_select" in select_keys, select_keys
-    print("PASS prediction is saved, history filters & trend charts render:", metrics, flush=True)
+
+    # Check UNASSIGNED explanation caption and expander
+    assert any("Records labeled UNASSIGNED" in item.value for item in at.caption)
+    assert any("Assign Machine ID to UNASSIGNED Records" in item.label for item in at.expander)
+
+    # Reassign the UNASSIGNED record to "LATHE-02"
+    _text_input(at, "reassign_target_mid").set_value("LATHE-02")
+    _button(at, "Assign Asset ID").click()
+    at.run()
+    _assert_clean(at, "Reassign asset ID")
+    print("PASS prediction is saved, UNASSIGNED reassignment UI works:", metrics, flush=True)
 
     # 6. Batch Prediction: upload a CSV and download the reports.
     print("[6] Opening Batch Prediction...", flush=True)
@@ -141,7 +160,7 @@ def main() -> None:
     _assert_clean(at, "History after batch save")
 
     metrics = {metric.label: metric.value for metric in at.metric}
-    assert metrics.get("Total Predictions") == "4", metrics
+    assert metrics.get("Total Predictions") == "5", metrics
 
     history_filter = next(s for s in at.selectbox if s.key == "history_machine_filter")
     assert any("PRESS" in opt or "MILL" in opt for opt in history_filter.options)
