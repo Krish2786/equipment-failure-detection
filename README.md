@@ -1,8 +1,19 @@
 # MachineGuard — Equipment Failure Detection System
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit%20App-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://equipment-failure-detection-fxnskhjorkm3jnsi6xtpgu.streamlit.app/)
+
 > **Infosys Springboard Virtual Internship 7.0 (Batch 4 — AI Domain)**  
 > **Project:** Machine Learning System for Early Detection of Equipment Failure  
 > **Dataset:** AI4I 2020 Predictive Maintenance Dataset (10,000 continuous CNC milling telemetry records)
+
+---
+
+## 🌐 Live Application
+
+The production application is live and accessible online at:  
+🔗 **[https://equipment-failure-detection-fxnskhjorkm3jnsi6xtpgu.streamlit.app/](https://equipment-failure-detection-fxnskhjorkm3jnsi6xtpgu.streamlit.app/)**
+
+Hosted on **Streamlit Community Cloud** (Linux container) backed by a permanent cloud-hosted **Supabase PostgreSQL** database for real-time user authentication, fleet health tracking, and prediction history persistence.
 
 ---
 
